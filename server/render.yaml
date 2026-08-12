@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: cookassist-judge
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: VLM_BACKEND
+        value: nemotron
+      - key: DEBUG_MODE
+        value: "true"
+      - key: NVIDIA_API_KEY
+        sync: false      # 대시보드에서 직접 입력 (저장소에 남기지 않음)
+      - key: NVIDIA_BASE_URL
+        sync: false
+      - key: NVIDIA_MODEL
+        sync: false
+      - key: TEAM_TOKEN
+        sync: false

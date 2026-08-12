@@ -1,0 +1,6 @@
+﻿ts,backend,model,promptVersion,mode,srgb,longEdge,n,accuracy,aGradeN,aGradeAccuracy,falseAccept,falseReject,cannotTellRate,unparsed,errors,latMedian,latMax,note
+2026-08-11T14:57:55,mock,"mock[DONE,NOT_DONE,CANNOT_TELL,GARBAGE]",v1,2,0,,23,0.2609,9,0.2222,4,2,0.4783,5,0,0,0,
+2026-08-11T14:59:40,nemotron,nvidia/nemotron-nano-12b-v2-vl,v1,2,0,,21,0.9524,7,0.8571,0,1,0.0,0,2,3648,5679,T2-1 데모세트(양파 썰기/볶기) 23쌍 1회차 · 1280px · P3
+2026-08-11T15:19:23,nemotron,nvidia/llama-3.1-nemotron-nano-vl-8b-v1,v1,2,0,,22,0.6818,8,0.25,0,7,0.0,0,1,3904,5439,동일 23쌍 · 백업 8b 모델 · 12b 대조
+2026-08-11T15:22:30,nemotron,nvidia/nemotron-nano-12b-v2-vl,v1,both,0,,18,0.9444,7,0.8571,0,1,0.0,0,5,3511,4222,12b · 1장vs2장 · 지연/페이로드 관점
+2026-08-11T15:52:05,mock,"mock[DONE,NOT_DONE,CANNOT_TELL]",v1,2,0,,23,0.3913,9,0.3333,4,3,0.3043,0,0,0,0,
