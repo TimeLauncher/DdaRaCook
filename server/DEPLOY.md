@@ -106,7 +106,7 @@ git push -u origin master     # 브랜치명이 main이면 main으로
 | `NVIDIA_API_KEY` | `nvapi-...` | 로컬 `.env` 에서 복사 |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | |
 | `NVIDIA_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | T0-2에서 확정 |
-| `TEAM_TOKEN` | `cookassist-Z9u05...` | 로컬 `.env` 와 **동일하게** |
+| `TEAM_TOKEN` | 로컬 `.env` 에서 복사 | 로컬 `.env` 와 **동일하게** |
 | `VLM_BACKEND` | `nemotron` | |
 | `DEBUG_MODE` | `true` | 아래 참조 |
 
@@ -168,8 +168,8 @@ curl -X POST https://<앱이름>.onrender.com/judge-step \
 판정 서버 배포됐습니다.
 
   URL   : https://<앱이름>.onrender.com
-  토큰  : cookassist-Z9u05...
-  계약서: CONTRACT.md
+  토큰  : (여기 적지 마세요 — DM 등 git 밖 경로로 별도 전달)
+  계약서: 저장소 루트의 CONTRACT.md
 
 실제 AI 판정은 아직(T1-4 예정)이지만,
 X-Mock-Verdict 헤더로 DONE/NOT_DONE/CANNOT_TELL 3분기를 지금 테스트할 수 있습니다.
