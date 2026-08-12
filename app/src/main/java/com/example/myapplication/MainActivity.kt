@@ -41,6 +41,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -99,7 +102,8 @@ private fun TtaraCookApp(
     val speechController = rememberSpeechController(
         context = context,
         onTranscript = sessionViewModel::handleVoiceTranscript,
-        onListeningChanged = sessionViewModel::setListening
+        onListeningChanged = sessionViewModel::setListening,
+        onError = sessionViewModel::onSpeechError
     )
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -124,13 +128,22 @@ private fun TtaraCookApp(
             when (uiState.currentScreen) {
                 AppScreen.S1_HOME -> HomeScreen(
                     uiState = uiState,
-                    onRecipeClick = sessionViewModel::selectRecipe
+                    onRecipeClick = sessionViewModel::selectRecipe,
+                    onAddRecipe = { sessionViewModel.openRecipeEditor() },
+                    onResume = sessionViewModel::resumeSavedSession
                 )
 
                 AppScreen.S2_RECIPE_DETAIL -> RecipeDetailScreen(
                     recipe = uiState.selectedRecipe ?: return@Surface,
                     onBack = sessionViewModel::backToHome,
-                    onStart = sessionViewModel::openDevicePreparation
+                    onStart = sessionViewModel::openDevicePreparation,
+                    onEdit = { sessionViewModel.openRecipeEditor(uiState.selectedRecipeId) }
+                )
+
+                AppScreen.S3_RECIPE_EDITOR -> RecipeEditorScreen(
+                    existing = uiState.selectedRecipe,
+                    onCancel = sessionViewModel::cancelRecipeEditor,
+                    onSave = sessionViewModel::saveRecipe
                 )
 
                 AppScreen.S4_DEVICE -> DeviceScreen(
@@ -149,6 +162,7 @@ private fun TtaraCookApp(
                     onNotYet = sessionViewModel::keepCurrentStepAndReschedule,
                     onRepeat = sessionViewModel::repeatCurrentStep,
                     onPrevious = sessionViewModel::moveToPreviousStep,
+                    onDisableAuto = sessionViewModel::disableAutoMode,
                     onUseBusyCapture = sessionViewModel::setFakeCaptureBehaviorBusy,
                     onUseSuccessCapture = sessionViewModel::setFakeCaptureBehaviorSuccess,
                     onUseDisconnectCapture = sessionViewModel::setFakeCaptureBehaviorDisconnect,
@@ -183,6 +197,7 @@ private fun TtaraCookApp(
                     onResumeAuto = sessionViewModel::resumeAutoMode,
                     onNext = sessionViewModel::continueToNextStep,
                     onRepeat = sessionViewModel::repeatCurrentStep,
+                    onPrevious = sessionViewModel::moveToPreviousStep,
                     onVoice = {
                         if (uiState.audioPermissionGranted) speechController.startListening() else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
@@ -200,7 +215,9 @@ private fun TtaraCookApp(
 @Composable
 private fun HomeScreen(
     uiState: CookingSessionUiState,
-    onRecipeClick: (String) -> Unit
+    onRecipeClick: (String) -> Unit,
+    onAddRecipe: () -> Unit,
+    onResume: () -> Unit
 ) {
     ScreenContainer {
         Column(
@@ -214,6 +231,14 @@ private fun HomeScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Text("대표 레시피 1종과 Fake Gateway로 자동 검사 흐름을 검증합니다.", color = Ash, fontSize = 14.sp, lineHeight = 22.sp)
             Spacer(modifier = Modifier.height(20.dp))
+            if (uiState.hasResumableSession && uiState.session != null) {
+                StatusBanner("진행 중인 요리 이어하기", "${uiState.session.currentStepIndex + 1}단계부터 계속할 수 있습니다.", BannerTone.Progress)
+                Spacer(modifier = Modifier.height(10.dp))
+                PrimaryButton("이어하기", onResume)
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+            GhostButton("레시피 추가", onAddRecipe)
+            Spacer(modifier = Modifier.height(16.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 itemsIndexed(uiState.recipes) { _, recipe ->
                     RecipeRow(recipe = recipe, onClick = { onRecipeClick(recipe.id) })
@@ -227,7 +252,8 @@ private fun HomeScreen(
 private fun RecipeDetailScreen(
     recipe: Recipe,
     onBack: () -> Unit,
-    onStart: () -> Unit
+    onStart: () -> Unit,
+    onEdit: () -> Unit
 ) {
     ScreenContainer(scrollable = true) {
         AppBar(title = recipe.title, onBack = onBack)
@@ -248,10 +274,124 @@ private fun RecipeDetailScreen(
                 StepCard(step)
                 Spacer(modifier = Modifier.height(10.dp))
             }
-            PrimaryButton(label = "요리 시작", onClick = onStart)
+            val errors = recipe.validationErrors()
+            if (errors.isNotEmpty()) {
+                Text(errors.joinToString("\n"), color = Color(0xFFE5C04A), fontSize = 12.sp)
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+            GhostButton(label = "레시피 편집", onClick = onEdit)
+            Spacer(modifier = Modifier.height(10.dp))
+            PrimaryButton(label = "요리 시작", onClick = onStart, enabled = errors.isEmpty())
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
+}
+
+@Composable
+private fun RecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, onSave: (Recipe) -> Unit) {
+    var title by remember(existing?.id) { mutableStateOf(existing?.title.orEmpty()) }
+    var ingredientsText by remember(existing?.id) { mutableStateOf(existing?.ingredients?.joinToString("\n") { "${it.name}: ${it.amount}" }.orEmpty()) }
+    var steps by remember(existing?.id) { mutableStateOf(existing?.steps.orEmpty()) }
+    var instruction by remember(existing?.id) { mutableStateOf("") }
+    var checkType by remember(existing?.id) { mutableStateOf(CheckType.PRESENCE) }
+    var condition by remember(existing?.id) { mutableStateOf("") }
+    var earliest by remember(existing?.id) { mutableStateOf("10") }
+    var interval by remember(existing?.id) { mutableStateOf("10") }
+    var consecutive by remember(existing?.id) { mutableStateOf("1") }
+    var maximum by remember(existing?.id) { mutableStateOf("120") }
+    var editingIndex by remember(existing?.id) { mutableStateOf<Int?>(null) }
+    var error by remember(existing?.id) { mutableStateOf<String?>(null) }
+    var dirty by remember(existing?.id) { mutableStateOf(false) }
+    var confirmCancel by remember { mutableStateOf(false) }
+
+    fun clearStepEditor() {
+        instruction = ""; condition = ""; checkType = CheckType.PRESENCE
+        earliest = "10"; interval = "10"; consecutive = "1"; maximum = "120"; editingIndex = null
+    }
+
+    fun saveStep() {
+        val values = listOf(earliest.toIntOrNull(), interval.toIntOrNull(), consecutive.toIntOrNull(), maximum.toIntOrNull())
+        if (instruction.isBlank()) { error = "단계 안내 문구를 입력하세요."; return }
+        if (checkType != CheckType.TIMER_ONLY && condition.isBlank()) { error = "자동 판정 단계에는 완료 조건이 필요합니다."; return }
+        if (values.any { it == null }) { error = "시간과 연속 DONE 기준은 숫자로 입력하세요."; return }
+        val policy = if (checkType == CheckType.TIMER_ONLY) null else InspectionPolicy(values[0]!!, values[1]!!, 3, values[2]!!, values[3]!!)
+        val step = RecipeStep(
+            order = (editingIndex ?: steps.size) + 1, instruction = instruction.trim(), checkType = checkType,
+            checkCondition = condition.trim().takeIf(String::isNotBlank), inspectionPolicy = policy, targetIngredients = emptyList(),
+            voicePrompt = instruction.trim(), helperText = condition.trim(), isAutoCheck = checkType != CheckType.TIMER_ONLY
+        )
+        val candidate = steps.toMutableList().apply { editingIndex?.let { set(it, step) } ?: add(step) }
+            .mapIndexed { index, item -> item.copy(order = index + 1) }
+        val validation = Recipe("draft", title, emptyList(), candidate, "", false).validationErrors().filterNot { "제목" in it }
+        if (validation.isNotEmpty()) { error = validation.first(); return }
+        steps = candidate; error = null; dirty = true; clearStepEditor()
+    }
+
+    ScreenContainer(scrollable = true) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(if (existing == null) "레시피 추가" else "레시피 편집", color = Flour, fontSize = 28.sp, fontWeight = FontWeight.Black)
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(title, { title = it; dirty = true }, label = { Text("레시피 제목") }, modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(ingredientsText, { ingredientsText = it; dirty = true }, label = { Text("재료 (한 줄에 이름: 수량)") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+            Spacer(modifier = Modifier.height(18.dp))
+            Text(if (editingIndex == null) "단계 추가" else "${editingIndex!! + 1}단계 편집", color = Flame, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(instruction, { instruction = it; dirty = true }, label = { Text("안내 문구") }, modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(10.dp))
+            ControlRow("판정 유형") {
+                CheckType.entries.forEach { type -> SmallGhostButton(if (type == checkType) "✓ ${type.label}" else type.label) { checkType = type; dirty = true } }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(condition, { condition = it; dirty = true }, label = { Text("완료 조건") }, modifier = Modifier.fillMaxWidth(), enabled = checkType != CheckType.TIMER_ONLY)
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumericField("최초 검사(초)", earliest, { earliest = it; dirty = true }, Modifier.weight(1f))
+                NumericField("재검사(초)", interval, { interval = it; dirty = true }, Modifier.weight(1f))
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NumericField("연속 DONE", consecutive, { consecutive = it; dirty = true }, Modifier.weight(1f))
+                NumericField("최대 시간(초)", maximum, { maximum = it; dirty = true }, Modifier.weight(1f))
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            GhostButton(if (editingIndex == null) "단계 추가" else "단계 수정 완료", ::saveStep)
+            Spacer(modifier = Modifier.height(16.dp))
+            steps.forEachIndexed { index, step ->
+                Card(modifier = Modifier.fillMaxWidth().clickable {
+                    editingIndex = index; instruction = step.instruction; checkType = step.checkType; condition = step.checkCondition.orEmpty()
+                    earliest = (step.inspectionPolicy?.earliestCheckSeconds ?: 0).toString(); interval = (step.inspectionPolicy?.checkIntervalSeconds ?: 0).toString()
+                    consecutive = (step.inspectionPolicy?.requiredConsecutiveDone ?: 1).toString(); maximum = (step.inspectionPolicy?.maxExpectedSeconds ?: 0).toString()
+                }, colors = CardDefaults.cardColors(containerColor = PanDark)) {
+                    Text("${step.order}. ${step.instruction}", modifier = Modifier.padding(12.dp), color = Flour)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            error?.let { Text(it, color = Color(0xFFE5C04A), fontSize = 12.sp); Spacer(modifier = Modifier.height(10.dp)) }
+            PrimaryButton("레시피 저장", onClick = {
+                val ingredients = ingredientsText.lines().mapNotNull { line ->
+                    val parts = line.split(':', limit = 2).map(String::trim)
+                    parts.firstOrNull()?.takeIf(String::isNotBlank)?.let { Ingredient(it, parts.getOrElse(1) { "적당량" }) }
+                }
+                val recipe = Recipe(existing?.id.orEmpty(), title.trim(), ingredients, steps, existing?.heroNote ?: "내가 만든 레시피", existing?.isMvpReady ?: false)
+                recipe.validationErrors().firstOrNull()?.let { error = it } ?: onSave(recipe)
+            })
+            Spacer(modifier = Modifier.height(10.dp))
+            GhostButton("취소") { if (dirty) confirmCancel = true else onCancel() }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+
+    if (confirmCancel) AlertDialog(
+        onDismissRequest = { confirmCancel = false }, title = { Text("변경사항을 버릴까요?") }, text = { Text("저장하지 않은 입력 내용이 사라집니다.") },
+        confirmButton = { SmallGhostButton("버리기") { confirmCancel = false; onCancel() } },
+        dismissButton = { SmallGhostButton("계속 편집") { confirmCancel = false } }
+    )
+}
+
+@Composable
+private fun NumericField(label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(value, { onChange(it.filter(Char::isDigit)) }, label = { Text(label) }, modifier = modifier, singleLine = true)
 }
 
 @Composable
@@ -303,6 +443,7 @@ private fun CookingScreen(
     onNotYet: () -> Unit,
     onRepeat: () -> Unit,
     onPrevious: () -> Unit,
+    onDisableAuto: () -> Unit,
     onUseBusyCapture: () -> Unit,
     onUseSuccessCapture: () -> Unit,
     onUseDisconnectCapture: () -> Unit,
@@ -329,6 +470,14 @@ private fun CookingScreen(
                 detail = cookingDetail(uiState),
                 tone = BannerTone.Progress
             )
+            val progress = (uiState.stepElapsedSeconds.toFloat() / (step.inspectionPolicy?.maxExpectedSeconds ?: 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+            Spacer(modifier = Modifier.height(10.dp))
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+            Text("경과 ${formatDuration(uiState.stepElapsedSeconds * 1_000L)}", color = Ash, fontSize = 12.sp)
+            if (uiState.maxExpectedExceeded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                StatusBanner("예상 시간 초과", "계속 조리하거나 수동 모드로 전환할 수 있습니다.", BannerTone.Caution)
+            }
             Spacer(modifier = Modifier.height(14.dp))
             InfoCard(title = "자동 검사") {
                 Text("최초 검사 ${step.inspectionPolicy?.earliestCheckSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
@@ -344,6 +493,7 @@ private fun CookingScreen(
                 SmallGhostButton("다시", onRepeat)
                 SmallGhostButton("이전", onPrevious)
                 SmallGhostButton("확인해줘", onStartInspection)
+                SmallGhostButton("자동 확인 끄기", onDisableAuto)
             }
             Spacer(modifier = Modifier.height(14.dp))
             ControlRow("Fake Capture") {
@@ -373,6 +523,10 @@ private fun CookingScreen(
                         Text("roundTrip ${session.lastRoundTripMs}ms / vlm ${session.lastVlmLatencyMs ?: "-"}ms", color = Ash, fontSize = 11.sp)
                     }
                 }
+            }
+            uiState.speechError?.let {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(it, color = Color(0xFFE5C04A), fontSize = 12.sp)
             }
         }
     }
@@ -425,7 +579,11 @@ private fun NeedsViewScreen(
         ) {
             StatusBanner(
                 title = "확인 필요",
-                detail = "CANNOT_TELL ${session.cannotTellCount}회 · 팬 쪽을 다시 봐주세요.",
+                detail = buildString {
+                    append(if (session.cannotTellStreak == 1) "대상이 잘 보이지 않습니다." else "두 번째 확인도 어려웠습니다.")
+                    session.lastReasonCode?.let { append(" 사유: ${it.label}.") }
+                    uiState.nextInspectionInSeconds?.let { append(" ${it}초 뒤 다시 확인합니다.") }
+                },
                 tone = BannerTone.Caution
             )
             Spacer(modifier = Modifier.height(18.dp))
@@ -442,6 +600,7 @@ private fun ManualModeScreen(
     onResumeAuto: () -> Unit,
     onNext: () -> Unit,
     onRepeat: () -> Unit,
+    onPrevious: () -> Unit,
     onVoice: () -> Unit
 ) {
     val step = uiState.currentStep ?: return
@@ -467,6 +626,8 @@ private fun ManualModeScreen(
             Spacer(modifier = Modifier.height(10.dp))
             GhostButton(label = "안내 다시 듣기", onClick = onRepeat)
             Spacer(modifier = Modifier.height(10.dp))
+            GhostButton(label = "이전 단계", onClick = onPrevious)
+            Spacer(modifier = Modifier.height(10.dp))
             VoiceButton(uiState, onVoice)
         }
     }
@@ -491,6 +652,11 @@ private fun SummaryScreen(
             SummaryRow("직접 넘김", "${session.manualNextCount}회")
             SummaryRow("DONE 후 이전", "${session.undoDoneCount}회")
             SummaryRow("카메라 활성 시간", "${session.cameraActiveMs / 1000.0}s")
+            SummaryRow("총 조리 시간", formatDuration(session.totalDurationMs))
+            SummaryRow("완료 단계", "${session.completedStepOrders.size}/${recipe.steps.size}")
+            recipe.steps.forEach { step -> session.stepDurationMs(step.order)?.let { SummaryRow("${step.order}단계 소요", formatDuration(it)) } }
+            recipe.steps.mapNotNull { step -> session.stepDurationMs(step.order)?.let { step.order to it } }
+                .maxByOrNull { it.second }?.let { SummaryRow("가장 오래 걸린 단계", "${it.first}단계 · ${formatDuration(it.second)}") }
             Spacer(modifier = Modifier.height(18.dp))
             InfoCard(title = "로그") {
                 session.logs.takeLast(8).forEach { log ->
@@ -546,6 +712,10 @@ private fun StepCard(step: RecipeStep) {
             Text(step.instruction, color = Flour, fontSize = 14.sp, lineHeight = 20.sp)
             Spacer(modifier = Modifier.height(8.dp))
             Text("${step.checkType.userLabel} · ${step.checkType.label}", color = Ash, fontSize = 12.sp)
+            step.inspectionPolicy?.let { policy ->
+                Text("예상 ${formatDuration(policy.maxExpectedSeconds * 1_000L)} · 최초 검사 ${policy.earliestCheckSeconds}초", color = AshDark, fontSize = 11.sp)
+            }
+            step.checkCondition?.let { Text("완료 조건 · $it", color = Ash, fontSize = 11.sp, lineHeight = 17.sp) }
         }
     }
 }
@@ -666,10 +836,11 @@ private fun ScreenContainer(scrollable: Boolean = false, content: @Composable ()
 }
 
 @Composable
-private fun PrimaryButton(label: String, onClick: () -> Unit) {
+private fun PrimaryButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
     Button(
         modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp),
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Flame, contentColor = Ink)
     ) {
@@ -699,6 +870,7 @@ private fun phaseTitle(phase: CookingPhase): String = when (phase) {
     CookingPhase.PROMPTING_USER -> "팬을 봐주세요"
     CookingPhase.CAPTURING -> "촬영 중"
     CookingPhase.JUDGING -> "판정 중"
+    CookingPhase.NETWORK_RETRY -> "네트워크 재시도"
     CookingPhase.NEEDS_VIEW -> "확인 필요"
     CookingPhase.STEP_COMPLETED -> "단계 완료"
     CookingPhase.MANUAL_MODE -> "수동 모드"
@@ -738,14 +910,18 @@ private class SpeechController(
     private val speechRecognizer: SpeechRecognizer?,
     private val context: Context,
     private val onTranscript: (String) -> Unit,
-    private val onListeningChanged: (Boolean) -> Unit
+    private val onListeningChanged: (Boolean) -> Unit,
+    private val onError: (String) -> Unit
 ) {
     fun speak(message: String) {
         textToSpeech?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "ttara-cook")
     }
 
     fun startListening() {
-        if (speechRecognizer == null) return
+        if (speechRecognizer == null) {
+            onError("이 기기에서는 음성 인식을 사용할 수 없습니다.")
+            return
+        }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.KOREAN.toLanguageTag())
@@ -765,7 +941,8 @@ private class SpeechController(
 private fun rememberSpeechController(
     context: Context,
     onTranscript: (String) -> Unit,
-    onListeningChanged: (Boolean) -> Unit
+    onListeningChanged: (Boolean) -> Unit,
+    onError: (String) -> Unit
 ): SpeechController {
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     var recognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
@@ -790,6 +967,7 @@ private fun rememberSpeechController(
                     }
                     override fun onError(error: Int) {
                         onListeningChanged(false)
+                        onError("음성 인식에 실패했습니다. 화면 버튼을 사용하거나 다시 시도하세요.")
                     }
                     override fun onResults(results: Bundle?) {
                         onListeningChanged(false)
@@ -812,8 +990,15 @@ private fun rememberSpeechController(
     }
 
     return remember(tts, recognizer) {
-        SpeechController(tts, recognizer, context, onTranscript, onListeningChanged)
+        SpeechController(tts, recognizer, context, onTranscript, onListeningChanged, onError)
     }
+}
+
+private fun formatDuration(durationMs: Long): String {
+    val totalSeconds = (durationMs / 1_000L).coerceAtLeast(0L)
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return if (minutes > 0) "${minutes}분 ${seconds}초" else "${seconds}초"
 }
 
 @Preview(showBackground = true, showSystemUi = true)
