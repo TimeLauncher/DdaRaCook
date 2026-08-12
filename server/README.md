@@ -52,7 +52,7 @@ python smoke.py --url http://127.0.0.1:8000 # HTTP 왕복 + 지연 분리 (T1-5)
 | 로컬 주소 | `http://192.168.2.206:8000` (같은 Wi-Fi 필요) |
 | 배포 주소 | **`https://ddaracook-server.onrender.com`** |
 | 토큰 | `.env` 의 `TEAM_TOKEN` — 별도 전달 |
-| 계약서 | **`CONTRACT.md` 를 읽으세요** |
+| 계약서 | **저장소 루트의 `../CONTRACT.md` 를 읽으세요** (정본은 루트 1벌) |
 
 ```bash
 # CANNOT_TELL 3회 연속 시나리오(F4-5)를 요리 없이 테스트
@@ -100,7 +100,6 @@ server/
 ├── eval.py                    # 정확도 평가                    (T2-2 ✅)
 ├── imageprep.py               # 축소 · 색공간 (원본 불변)       (T2-1/T2-2 ✅)
 ├── inspect_image.py           # 이미지 규격 감사 (EXIF·ICC)
-├── CONTRACT.md                # API 계약서 — 2번이 읽을 것     (T0-4 ✅)
 ├── 이미지규격_요청서.md         # 1번 요청 + 내 촬영 계획         (T0-6 ✅)
 ├── notes/nemotron.md          # 모델 조사 + 지연 실측 기록
 └── testdata/
