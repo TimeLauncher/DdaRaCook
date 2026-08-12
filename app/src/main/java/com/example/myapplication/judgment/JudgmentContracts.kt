@@ -20,6 +20,8 @@ data class JudgmentRequest(
 
 data class JudgmentResult(
     val requestId: String,
+    val cookingSessionId: String,
+    val stepOrder: Int,
     val verdict: JudgmentVerdict,
     val reasonCode: ReasonCode,
     val roundTripMs: Long,

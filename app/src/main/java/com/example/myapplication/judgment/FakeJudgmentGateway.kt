@@ -31,6 +31,8 @@ class FakeJudgmentGateway : JudgmentGateway {
                     JudgmentOutcome.Success(
                         JudgmentResult(
                             requestId = request.requestId,
+                            cookingSessionId = request.cookingSessionId,
+                            stepOrder = request.stepOrder,
                             verdict = selected.verdict,
                             reasonCode = selected.reasonCode,
                             roundTripMs = roundTrip,

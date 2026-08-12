@@ -13,16 +13,32 @@ import org.junit.runner.RunWith
 class AppPersistenceInstrumentedTest {
     private lateinit var persistence: AppPersistence
 
-    @Before fun setUp() {
+    @Before
+    fun setUp() {
         persistence = AppPersistence(ApplicationProvider.getApplicationContext(), "persistence-test")
         persistence.clear()
     }
-    @After fun tearDown() { persistence.clear() }
 
-    @Test fun recipesAndActiveSessionSurviveRoundTrip() {
+    @After
+    fun tearDown() {
+        persistence.clear()
+    }
+
+    @Test
+    fun recipesAndActiveSessionSurviveRoundTrip() {
         val recipes = RecipeFixtures.sampleRecipes()
-        val session = CookingSession(id = "session-test", recipeId = recipes.first().id, phase = CookingPhase.JUDGING, currentStepIndex = 2, activeRequestId = "in-flight", completedStepOrders = setOf(1, 2))
-        persistence.saveRecipes(recipes); persistence.saveSession(session)
+        val session = CookingSession(
+            id = "session-test",
+            recipeId = recipes.first().id,
+            phase = CookingPhase.JUDGING,
+            currentStepIndex = 2,
+            activeRequestId = "in-flight",
+            completedStepOrders = setOf(1, 2)
+        )
+
+        persistence.saveRecipes(recipes)
+        persistence.saveSession(session)
+
         assertEquals(recipes.size, persistence.loadRecipes(emptyList()).size)
         val restored = persistence.loadSession()
         assertNotNull(restored)
