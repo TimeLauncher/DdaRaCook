@@ -1,0 +1,37 @@
+# 🔑 절대 커밋 금지
+.env
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 평가 결과 (재생성 가능)
+eval_results/
+*.csv
+# ⚠️ 단, 프롬프트 버전별 성능 추이는 재생성이 불가능하다 (과거 실행 결과이므로).
+#    T2-3(v1→v2→v3) 비교의 유일한 근거이므로 이것만 추적한다.
+!testdata/eval_history.csv
+
+# probe 생성물
+probe_images/
+
+# 📷 안경 원본 (testdata/raw/)
+#   · 1장 약 1.8MB — 20~30쌍이면 저장소가 100MB 단위로 불어나고
+#     Render 가 배포마다 이걸 통째로 clone 한다
+#   · 얼굴·위치 등 개인정보가 남아 있을 수 있다 (raw/README.md 참조)
+#   → 로컬 + 별도 백업(드라이브·USB)으로 보관하고 git 에는 올리지 않는다.
+#     평가에 실제로 쓰이는 정규화본(images/)은 추적한다.
+testdata/raw/*
+!testdata/raw/README.md
+!testdata/raw/촬영목록_*.md
+#   ↑ 사진은 막되 문서는 추적한다. 촬영 목록은 다음 촬영의 근거이고
+#     "왜 이 사진들이 필요한가"가 담겨 있어 재생성이 불가능하다.
+
+# OS
+.DS_Store
+Thumbs.db

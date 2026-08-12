@@ -1,0 +1,52 @@
+[
+  {
+    "_comment": "이 파일은 스키마 예시입니다. 실제 라벨은 labels.json 에 씁니다. eval.py 는 이 파일을 읽지 않습니다.",
+    "_필드설명": {
+      "pairId": "파일명 접두사. 이미지는 images/{pairId}_current.jpg 와 {pairId}_start.jpg",
+      "checkType": "PRESENCE | IDENTIFY | COUNT | COLOR_CHANGE | STATE_CHANGE | TIME_ONLY (명세서 5.1)",
+      "groundTruth": "DONE | NOT_DONE | CANNOT_TELL. 판단이 어려우면 넣지 말고 ambiguous=true",
+      "hasStartImage": "★ 시작 이미지 '파일이 있는가'라는 사실. 보낼지 말지는 eval.py --mode 가 정한다",
+      "ambiguous": "사람도 판단이 어려운 쌍. 기본 집계에서 제외된다 (계획서 T2-1 주의사항)",
+      "note": "★ 촬영 순간의 실제 상태. 나중에 사진만 보고 라벨을 달면 틀린다"
+    }
+  },
+
+  {
+    "pairId": "kfr_step1_pair01",
+    "recipeId": "kimchi-fried-rice",
+    "stepOrder": 1,
+    "instruction": "양파를 팬에 넣기",
+    "checkType": "PRESENCE",
+    "checkCondition": "팬 안에 양파가 들어가 있는가",
+    "elapsedSeconds": 30,
+    "hasStartImage": false,
+    "ambiguous": false,
+    "groundTruth": "DONE",
+    "note": "빈 팬 → 양파 투입 직후. PRESENCE 는 비교 기준이 필요 없어 current 한 장만 찍음"
+  },
+  {
+    "pairId": "kfr_step3_pair01",
+    "recipeId": "kimchi-fried-rice",
+    "stepOrder": 3,
+    "instruction": "양파를 투명해질 때까지 볶기",
+    "checkType": "COLOR_CHANGE",
+    "checkCondition": "팬 안의 양파가 흰색/불투명에서 반투명하게 변했는가",
+    "elapsedSeconds": 260,
+    "hasStartImage": true,
+    "ambiguous": false,
+    "groundTruth": "NOT_DONE",
+    "note": "4분20초. 가장자리만 익고 가운데는 아직 흰색 — 실제로는 덜 익음"
+  },
+  {
+    "pairId": "kfr_step3_pair03",
+    "recipeId": "kimchi-fried-rice",
+    "stepOrder": 3,
+    "instruction": "양파를 투명해질 때까지 볶기",
+    "checkType": "COLOR_CHANGE",
+    "checkCondition": "팬 안의 양파가 흰색/불투명에서 반투명하게 변했는가",
+    "elapsedSeconds": 300,
+    "hasStartImage": true,
+    "ambiguous": true,
+    "note": "5분. 사람이 봐도 애매 — groundTruth 를 억지로 정하지 않고 제외한다"
+  }
+]
