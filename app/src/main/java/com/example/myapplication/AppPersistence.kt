@@ -21,12 +21,14 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
     }.getOrNull()
 
     fun saveSession(session: CookingSession?) {
-        preferences.edit().apply {
-            if (session == null) remove(KEY_SESSION) else putString(KEY_SESSION, session.toJson().toString())
-        }.apply()
+        val editor = preferences.edit()
+        if (session == null) editor.remove(KEY_SESSION) else editor.putString(KEY_SESSION, session.toJson().toString())
+        editor.apply()
     }
 
-    internal fun clear() = preferences.edit().clear().commit()
+    internal fun clear() {
+        preferences.edit().clear().commit()
+    }
 
     private companion object {
         const val KEY_RECIPES = "recipes"
@@ -37,18 +39,38 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
 private fun List<Recipe>.toJson() = JSONArray().also { array ->
     forEach { recipe ->
         array.put(JSONObject().apply {
-            put("id", recipe.id); put("title", recipe.title); put("heroNote", recipe.heroNote); put("isMvpReady", recipe.isMvpReady)
-            put("ingredients", JSONArray().also { ingredients -> recipe.ingredients.forEach { ingredients.put(JSONObject().put("name", it.name).put("amount", it.amount)) } })
-            put("steps", JSONArray().also { steps -> recipe.steps.forEach { step ->
-                steps.put(JSONObject().apply {
-                    put("instruction", step.instruction); put("checkType", step.checkType.name); put("checkCondition", step.checkCondition)
-                    put("targetIngredients", JSONArray(step.targetIngredients)); put("voicePrompt", step.voicePrompt); put("helperText", step.helperText); put("isAutoCheck", step.isAutoCheck)
-                    step.inspectionPolicy?.let { policy -> put("policy", JSONObject().apply {
-                        put("earliest", policy.earliestCheckSeconds); put("interval", policy.checkIntervalSeconds); put("burst", policy.burstSeconds)
-                        put("consecutive", policy.requiredConsecutiveDone); put("maximum", policy.maxExpectedSeconds)
-                    }) }
-                })
-            } })
+            put("id", recipe.id)
+            put("title", recipe.title)
+            put("heroNote", recipe.heroNote)
+            put("isMvpReady", recipe.isMvpReady)
+            put("ingredients", JSONArray().also { ingredients ->
+                recipe.ingredients.forEach { ingredient ->
+                    ingredients.put(JSONObject().put("name", ingredient.name).put("amount", ingredient.amount))
+                }
+            })
+            put("steps", JSONArray().also { steps ->
+                recipe.steps.forEach { step ->
+                    steps.put(JSONObject().apply {
+                        put("order", step.order)
+                        put("instruction", step.instruction)
+                        put("checkType", step.checkType.name)
+                        put("checkCondition", step.checkCondition)
+                        put("targetIngredients", JSONArray(step.targetIngredients))
+                        put("voicePrompt", step.voicePrompt)
+                        put("helperText", step.helperText)
+                        put("isAutoCheck", step.isAutoCheck)
+                        step.inspectionPolicy?.let { policy ->
+                            put("inspectionPolicy", JSONObject().apply {
+                                put("earliestCheckSeconds", policy.earliestCheckSeconds)
+                                put("checkIntervalSeconds", policy.checkIntervalSeconds)
+                                put("burstSeconds", policy.burstSeconds)
+                                put("requiredConsecutiveDone", policy.requiredConsecutiveDone)
+                                put("maxExpectedSeconds", policy.maxExpectedSeconds)
+                            })
+                        }
+                    })
+                }
+            })
         })
     }
 }
@@ -56,62 +78,155 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
 private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
     for (index in 0 until length()) {
         val json = getJSONObject(index)
-        val ingredientJson = json.getJSONArray("ingredients")
-        val ingredients = List(ingredientJson.length()) { i -> ingredientJson.getJSONObject(i).let { Ingredient(it.getString("name"), it.getString("amount")) } }
-        val stepJson = json.getJSONArray("steps")
-        val steps = List(stepJson.length()) { i ->
-            val step = stepJson.getJSONObject(i)
-            val policy = step.optJSONObject("policy")?.let { InspectionPolicy(it.getInt("earliest"), it.getInt("interval"), it.getInt("burst"), it.getInt("consecutive"), it.getInt("maximum")) }
-            val targets = step.getJSONArray("targetIngredients")
-            RecipeStep(i + 1, step.getString("instruction"), enumValueOf(step.getString("checkType")), step.optString("checkCondition").takeIf(String::isNotBlank), policy,
-                List(targets.length()) { targets.getString(it) }, step.getString("voicePrompt"), step.getString("helperText"), step.getBoolean("isAutoCheck"))
+        val ingredientsJson = json.getJSONArray("ingredients")
+        val ingredients = buildList {
+            for (ingredientIndex in 0 until ingredientsJson.length()) {
+                val ingredient = ingredientsJson.getJSONObject(ingredientIndex)
+                add(Ingredient(ingredient.getString("name"), ingredient.getString("amount")))
+            }
         }
-        add(Recipe(json.getString("id"), json.getString("title"), ingredients, steps, json.getString("heroNote"), json.getBoolean("isMvpReady")))
+        val stepsJson = json.getJSONArray("steps")
+        val steps = buildList {
+            for (stepIndex in 0 until stepsJson.length()) {
+                val step = stepsJson.getJSONObject(stepIndex)
+                val policy = step.optJSONObject("inspectionPolicy")?.let {
+                    InspectionPolicy(
+                        earliestCheckSeconds = it.getInt("earliestCheckSeconds"),
+                        checkIntervalSeconds = it.getInt("checkIntervalSeconds"),
+                        burstSeconds = it.getInt("burstSeconds"),
+                        requiredConsecutiveDone = it.getInt("requiredConsecutiveDone"),
+                        maxExpectedSeconds = it.getInt("maxExpectedSeconds")
+                    )
+                }
+                val targetsJson = step.getJSONArray("targetIngredients")
+                add(
+                    RecipeStep(
+                        order = stepIndex + 1,
+                        instruction = step.getString("instruction"),
+                        checkType = enumValueOf(step.getString("checkType")),
+                        checkCondition = step.optString("checkCondition").takeIf(String::isNotBlank),
+                        inspectionPolicy = policy,
+                        targetIngredients = List(targetsJson.length()) { targetsJson.getString(it) },
+                        voicePrompt = step.getString("voicePrompt"),
+                        helperText = step.getString("helperText"),
+                        isAutoCheck = step.getBoolean("isAutoCheck")
+                    )
+                )
+            }
+        }
+        add(
+            Recipe(
+                id = json.getString("id"),
+                title = json.getString("title"),
+                ingredients = ingredients,
+                steps = steps,
+                heroNote = json.getString("heroNote"),
+                isMvpReady = json.getBoolean("isMvpReady")
+            )
+        )
     }
 }
 
 private fun CookingSession.toJson() = JSONObject().apply {
-    put("id", id); put("recipeId", recipeId); put("phase", phase.name); put("mode", mode.name); put("currentStepIndex", currentStepIndex)
-    put("cannotTellStreak", cannotTellStreak); put("consecutiveDoneCount", consecutiveDoneCount); put("networkFailureCount", networkFailureCount)
-    put("autoDoneCount", autoDoneCount); put("notDoneCount", notDoneCount); put("cannotTellCount", cannotTellCount); put("manualNextCount", manualNextCount); put("undoDoneCount", undoDoneCount)
-    put("cameraActiveMs", cameraActiveMs); put("startedAtMs", startedAtMs); put("completedAtMs", completedAtMs); put("currentStepStartedAtMs", currentStepStartedAtMs)
-    put("lastCaptureUriByStep", lastCaptureUriByStep.mapJson()); put("baselineUriByStep", baselineUriByStep.mapJson())
-    put("stepStartedAtMsByOrder", stepStartedAtMsByOrder.mapJson()); put("stepCompletedAtMsByOrder", stepCompletedAtMsByOrder.mapJson())
-    put("completedStepOrders", JSONArray(completedStepOrders.toList())); put("currentVerdict", currentVerdict?.name); put("lastRoundTripMs", lastRoundTripMs)
-    put("lastVlmLatencyMs", lastVlmLatencyMs); put("lastReasonCode", lastReasonCode?.name)
-    put("logs", JSONArray().also { array -> logs.forEach { log -> array.put(log.toJson()) } })
+    put("id", id)
+    put("recipeId", recipeId)
+    put("phase", phase.name)
+    put("mode", mode.name)
+    put("currentStepIndex", currentStepIndex)
+    put("cannotTellStreak", cannotTellStreak)
+    put("consecutiveDoneCount", consecutiveDoneCount)
+    put("networkFailureCount", networkFailureCount)
+    put("autoDoneCount", autoDoneCount)
+    put("notDoneCount", notDoneCount)
+    put("cannotTellCount", cannotTellCount)
+    put("manualNextCount", manualNextCount)
+    put("undoDoneCount", undoDoneCount)
+    put("cameraActiveMs", cameraActiveMs)
+    put("startedAtMs", startedAtMs)
+    put("completedAtMs", completedAtMs)
+    put("currentStepStartedAtMs", currentStepStartedAtMs)
+    put("lastCaptureUriByStep", lastCaptureUriByStep.toJson())
+    put("baselineUriByStep", baselineUriByStep.toJson())
+    put("stepStartedAtMsByOrder", stepStartedAtMsByOrder.toJson())
+    put("stepCompletedAtMsByOrder", stepCompletedAtMsByOrder.toJson())
+    put("completedStepOrders", JSONArray(completedStepOrders.toList()))
+    put("currentVerdict", currentVerdict?.name)
+    put("lastRoundTripMs", lastRoundTripMs)
+    put("lastVlmLatencyMs", lastVlmLatencyMs)
+    put("lastReasonCode", lastReasonCode?.name)
+    put("logs", JSONArray().also { array -> logs.forEach { array.put(it.toJson()) } })
 }
 
 private fun JSONObject.toSession(): CookingSession {
-    val storedPhase = enumValueOf<CookingPhase>(getString("phase"))
+    val restoredPhase = enumValueOf<CookingPhase>(getString("phase"))
     return CookingSession(
-        id = getString("id"), recipeId = getString("recipeId"),
-        phase = if (storedPhase in setOf(CookingPhase.CAPTURING, CookingPhase.JUDGING, CookingPhase.PROMPTING_USER)) CookingPhase.WAITING_FOR_CHECK else storedPhase,
-        mode = enumValueOf(getString("mode")), currentStepIndex = getInt("currentStepIndex"), cannotTellStreak = optInt("cannotTellStreak"),
-        consecutiveDoneCount = optInt("consecutiveDoneCount"), networkFailureCount = optInt("networkFailureCount"), autoDoneCount = optInt("autoDoneCount"),
-        notDoneCount = optInt("notDoneCount"), cannotTellCount = optInt("cannotTellCount"), manualNextCount = optInt("manualNextCount"), undoDoneCount = optInt("undoDoneCount"),
-        cameraActiveMs = optLong("cameraActiveMs"), lastCaptureUriByStep = optJSONObject("lastCaptureUriByStep").stringMap(), baselineUriByStep = optJSONObject("baselineUriByStep").stringMap(),
-        logs = optJSONArray("logs").logs(), activeRequestId = null, currentVerdict = optString("currentVerdict").enumOrNull<JudgmentVerdict>(),
-        lastRoundTripMs = nullableLong("lastRoundTripMs"), lastVlmLatencyMs = nullableLong("lastVlmLatencyMs"), startedAtMs = optLong("startedAtMs", System.currentTimeMillis()),
-        completedAtMs = nullableLong("completedAtMs"), currentStepStartedAtMs = optLong("currentStepStartedAtMs", System.currentTimeMillis()),
-        stepStartedAtMsByOrder = optJSONObject("stepStartedAtMsByOrder").longMap(), stepCompletedAtMsByOrder = optJSONObject("stepCompletedAtMsByOrder").longMap(),
-        completedStepOrders = optJSONArray("completedStepOrders").intSet(), lastReasonCode = optString("lastReasonCode").enumOrNull<ReasonCode>()
+        id = getString("id"),
+        recipeId = getString("recipeId"),
+        phase = if (restoredPhase in setOf(CookingPhase.CAPTURING, CookingPhase.JUDGING, CookingPhase.PROMPTING_USER)) CookingPhase.WAITING_FOR_CHECK else restoredPhase,
+        mode = enumValueOf(getString("mode")),
+        currentStepIndex = getInt("currentStepIndex"),
+        cannotTellStreak = optInt("cannotTellStreak"),
+        consecutiveDoneCount = optInt("consecutiveDoneCount"),
+        networkFailureCount = optInt("networkFailureCount"),
+        autoDoneCount = optInt("autoDoneCount"),
+        notDoneCount = optInt("notDoneCount"),
+        cannotTellCount = optInt("cannotTellCount"),
+        manualNextCount = optInt("manualNextCount"),
+        undoDoneCount = optInt("undoDoneCount"),
+        cameraActiveMs = optLong("cameraActiveMs"),
+        lastCaptureUriByStep = optJSONObject("lastCaptureUriByStep").toStringMap(),
+        baselineUriByStep = optJSONObject("baselineUriByStep").toStringMap(),
+        logs = optJSONArray("logs").toLogs(),
+        activeRequestId = null,
+        currentVerdict = optString("currentVerdict").enumOrNull<JudgmentVerdict>(),
+        lastRoundTripMs = optNullableLong("lastRoundTripMs"),
+        lastVlmLatencyMs = optNullableLong("lastVlmLatencyMs"),
+        startedAtMs = optLong("startedAtMs", System.currentTimeMillis()),
+        completedAtMs = optNullableLong("completedAtMs"),
+        currentStepStartedAtMs = optLong("currentStepStartedAtMs", System.currentTimeMillis()),
+        stepStartedAtMsByOrder = optJSONObject("stepStartedAtMsByOrder").toLongMap(),
+        stepCompletedAtMsByOrder = optJSONObject("stepCompletedAtMsByOrder").toLongMap(),
+        completedStepOrders = optJSONArray("completedStepOrders").toIntSet(),
+        lastReasonCode = optString("lastReasonCode").enumOrNull<ReasonCode>()
     )
 }
 
 private fun SessionLogEntry.toJson() = JSONObject().apply {
-    put("timestampMs", timestampMs); put("stepOrder", stepOrder); put("message", message); put("verdict", verdict?.name); put("roundTripMs", roundTripMs)
-    put("vlmLatencyMs", vlmLatencyMs); put("reasonCode", reasonCode?.name); put("requestId", requestId); put("eventType", eventType); put("manualOverride", manualOverride); put("overrideType", overrideType)
+    put("timestampMs", timestampMs)
+    put("stepOrder", stepOrder)
+    put("message", message)
+    put("verdict", verdict?.name)
+    put("roundTripMs", roundTripMs)
+    put("vlmLatencyMs", vlmLatencyMs)
+    put("reasonCode", reasonCode?.name)
+    put("requestId", requestId)
+    put("eventType", eventType)
+    put("manualOverride", manualOverride)
+    put("overrideType", overrideType)
 }
 
-private fun JSONArray?.logs(): List<SessionLogEntry> = if (this == null) emptyList() else List(length()) { i -> getJSONObject(i).let { json ->
-    SessionLogEntry(json.getLong("timestampMs"), json.getInt("stepOrder"), json.getString("message"), json.optString("verdict").enumOrNull<JudgmentVerdict>(),
-        json.nullableLong("roundTripMs"), json.nullableLong("vlmLatencyMs"), json.optString("reasonCode").enumOrNull<ReasonCode>(),
-        json.optString("requestId").takeIf(String::isNotBlank), json.optString("eventType", "INFO"), json.optBoolean("manualOverride"), json.optString("overrideType").takeIf(String::isNotBlank))
-} }
-private fun Map<Int, *>.mapJson() = JSONObject().also { json -> forEach { (key, value) -> json.put(key.toString(), value) } }
-private fun JSONObject?.stringMap() = if (this == null) emptyMap() else keys().asSequence().associate { it.toInt() to getString(it) }
-private fun JSONObject?.longMap() = if (this == null) emptyMap() else keys().asSequence().associate { it.toInt() to getLong(it) }
-private fun JSONArray?.intSet() = if (this == null) emptySet() else (0 until length()).mapTo(mutableSetOf()) { getInt(it) }
-private fun JSONObject.nullableLong(name: String): Long? = if (!has(name) || isNull(name)) null else getLong(name)
+private fun JSONArray?.toLogs(): List<SessionLogEntry> = if (this == null) emptyList() else buildList {
+    for (index in 0 until length()) {
+        val json = getJSONObject(index)
+        add(SessionLogEntry(
+            timestampMs = json.getLong("timestampMs"),
+            stepOrder = json.getInt("stepOrder"),
+            message = json.getString("message"),
+            verdict = json.optString("verdict").enumOrNull<JudgmentVerdict>(),
+            roundTripMs = json.optNullableLong("roundTripMs"),
+            vlmLatencyMs = json.optNullableLong("vlmLatencyMs"),
+            reasonCode = json.optString("reasonCode").enumOrNull<ReasonCode>(),
+            requestId = json.optString("requestId").takeIf(String::isNotBlank),
+            eventType = json.optString("eventType", "INFO"),
+            manualOverride = json.optBoolean("manualOverride"),
+            overrideType = json.optString("overrideType").takeIf(String::isNotBlank)
+        ))
+    }
+}
+
+private fun Map<Int, *>.toJson() = JSONObject().also { json -> forEach { (key, value) -> json.put(key.toString(), value) } }
+private fun JSONObject?.toStringMap(): Map<Int, String> = if (this == null) emptyMap() else keys().asSequence().associate { it.toInt() to getString(it) }
+private fun JSONObject?.toLongMap(): Map<Int, Long> = if (this == null) emptyMap() else keys().asSequence().associate { it.toInt() to getLong(it) }
+private fun JSONArray?.toIntSet(): Set<Int> = if (this == null) emptySet() else (0 until length()).mapTo(mutableSetOf()) { getInt(it) }
+private fun JSONObject.optNullableLong(name: String): Long? = if (isNull(name) || !has(name)) null else getLong(name)
 private inline fun <reified T : Enum<T>> String.enumOrNull(): T? = takeIf(String::isNotBlank)?.let { runCatching { enumValueOf<T>(it) }.getOrNull() }

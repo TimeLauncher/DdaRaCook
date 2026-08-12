@@ -81,7 +81,6 @@ val CookingSession.totalDurationMs: Long
 
 fun CookingSession.stepDurationMs(stepOrder: Int, nowMs: Long = System.currentTimeMillis()): Long? {
     val started = stepStartedAtMsByOrder[stepOrder] ?: return null
-    val ended = stepCompletedAtMsByOrder[stepOrder]
-        ?: if (currentStepIndex + 1 == stepOrder) nowMs else return null
+    val ended = stepCompletedAtMsByOrder[stepOrder] ?: if (currentStepIndex + 1 == stepOrder) nowMs else return null
     return (ended - started).coerceAtLeast(0L)
 }

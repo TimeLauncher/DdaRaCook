@@ -45,6 +45,7 @@ data class InspectionPolicy(
 
 enum class CheckType(val label: String, val userLabel: String) {
     PRESENCE("존재 여부", "자동 확인"),
+    COUNT("개수 확인", "자동 확인"),
     IDENTIFICATION("재료 식별", "자동 확인"),
     COLOR_CHANGE("색상 변화", "확인 보조"),
     STATE_TRANSITION("상태 전환", "확인 보조"),
