@@ -25,21 +25,20 @@ data class NormalizedImage(
 class ImageNormalizer(private val context: Context) {
     fun normalize(uriValue: String): NormalizedImage {
         val original = open(uriValue).use(InputStream::readBytes)
-        require(original.size >= 3 && original[0] == 0xFF.toByte() && original[1] == 0xD8.toByte()) {
-            "JPEG 이미지만 판정에 사용할 수 있습니다."
-        }
         val orientation = runCatching {
             open(uriValue).use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
         }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-        val decoded = requireNotNull(BitmapFactory.decodeByteArray(original, 0, original.size)) { "JPEG 이미지를 디코딩할 수 없습니다." }
+        val decoded = requireNotNull(BitmapFactory.decodeByteArray(original, 0, original.size)) {
+            "판정 이미지를 디코딩할 수 없습니다."
+        }
         val oriented = decoded.applyOrientation(orientation)
-        val scaled = oriented.scaleToLongEdge(MAX_LONG_EDGE)
+        val cropped = oriented.centerCropWidth(MAX_SERVER_WIDTH)
         val output = ByteArrayOutputStream()
-        check(scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) { "JPEG 정규화에 실패했습니다." }
+        check(cropped.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) { "JPEG 정규화에 실패했습니다." }
         val bytes = output.toByteArray()
-        val outputWidth = scaled.width
-        val outputHeight = scaled.height
-        if (scaled !== oriented) scaled.recycle()
+        val outputWidth = cropped.width
+        val outputHeight = cropped.height
+        if (cropped !== oriented) cropped.recycle()
         if (oriented !== decoded) oriented.recycle()
         decoded.recycle()
         return NormalizedImage(
@@ -61,7 +60,7 @@ class ImageNormalizer(private val context: Context) {
     }
 
     private companion object {
-        const val MAX_LONG_EDGE = 1280
+        const val MAX_SERVER_WIDTH = 1024
         const val JPEG_QUALITY = 80
     }
 }
@@ -81,15 +80,35 @@ private fun Bitmap.applyOrientation(orientation: Int): Bitmap {
     return if (matrix.isIdentity) this else Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
 }
 
-private fun Bitmap.scaleToLongEdge(maxLongEdge: Int): Bitmap {
-    val longEdge = maxOf(width, height)
-    if (longEdge <= maxLongEdge) return this
-    val scale = maxLongEdge.toFloat() / longEdge
-    return Bitmap.createScaledBitmap(this, (width * scale).toInt(), (height * scale).toInt(), true)
+private fun Bitmap.centerCropWidth(maxWidth: Int): Bitmap {
+    val crop = horizontalCenterCropBounds(width = width, height = height, maxWidth = maxWidth)
+    if (crop.width == width) return this
+    return Bitmap.createBitmap(this, crop.left, 0, crop.width, crop.height)
+}
+
+internal data class HorizontalCropBounds(
+    val left: Int,
+    val width: Int,
+    val height: Int
+)
+
+internal fun horizontalCenterCropBounds(
+    width: Int,
+    height: Int,
+    maxWidth: Int = 1024
+): HorizontalCropBounds {
+    require(width > 0 && height > 0) { "이미지 크기는 0보다 커야 합니다." }
+    require(maxWidth > 0) { "최대 가로폭은 0보다 커야 합니다." }
+    val croppedWidth = width.coerceAtMost(maxWidth)
+    return HorizontalCropBounds(
+        left = (width - croppedWidth) / 2,
+        width = croppedWidth,
+        height = height
+    )
 }
 
 private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(this)
     .joinToString("") { "%02x".format(it) }
 
-const val PIPELINE_VERSION = "jpeg80-srgb-exif-baked-v1"
+const val PIPELINE_VERSION = "center-x1024-jpeg80-exif-baked-v2"

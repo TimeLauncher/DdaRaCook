@@ -1,10 +1,10 @@
 package com.example.myapplication.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 
-private val DarkColorScheme = darkColorScheme(
+private val AppColorScheme = lightColorScheme(
     primary = Flame,
     secondary = Herb,
     tertiary = Ash,
@@ -22,7 +22,7 @@ fun MyApplicationTheme(
     content: @Composable () -> Unit
 ) {
     MaterialTheme(
-        colorScheme = DarkColorScheme,
+        colorScheme = AppColorScheme,
         typography = Typography,
         content = content
     )

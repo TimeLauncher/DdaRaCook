@@ -5,7 +5,7 @@
 점검 대상: 머지 커밋 `7b31b63` 시점의 `app/` · `server/` 소스  
 점검자: 3번
 
-위반 8건 (2번 담당 6 · 3번 담당 2) · 권고 미이행 1건
+2026-08-13 재점검: 위반 8건 해결 · 권고 1건 이행. 아래 내용은 발견 당시 원인과 수정 근거를 보존한 이력이다.
 
 ---
 
@@ -36,7 +36,7 @@ val useMockJudgment: Boolean = true                   // 기본값 true
 
 ## A. 2번(앱) 담당 — 6건
 
-### [ ] A-1. `STATE_CHANGE`에도 `startImage`를 보냄 · §3.2
+### [x] A-1. `STATE_CHANGE`에도 `startImage`를 보냄 · §3.2
 
 **위치** `JudgeApiService.kt:79`
 
@@ -54,7 +54,7 @@ if (step.checkType == CheckType.COLOR_CHANGE || step.checkType == CheckType.STAT
 
 ---
 
-### [ ] A-2. `checkType`에 `COUNT`가 없음 · §3.1
+### [x] A-2. `checkType`에 `COUNT`가 없음 · §3.1
 
 **위치** `RecipeModels.kt:46-51` (enum 5종) · `JudgeApiService.kt:150-158` (매핑)
 
@@ -67,7 +67,7 @@ if (step.checkType == CheckType.COLOR_CHANGE || step.checkType == CheckType.STAT
 
 ---
 
-### [ ] A-3. 모르는 `reasonCode`를 `NETWORK_RETRY`로 처리 · §4
+### [x] A-3. 모르는 `reasonCode`를 `NETWORK_RETRY`로 처리 · §4
 
 **위치** `JudgeApiService.kt:173`
 
@@ -85,7 +85,7 @@ else -> ReasonCode.NETWORK_RETRY
 
 ---
 
-### [ ] A-4. 429에 백오프 재시도가 없음 · §5
+### [x] A-4. 429에 백오프 재시도가 없음 · §5
 
 **위치** `JudgeApiService.kt:99`
 
@@ -101,7 +101,7 @@ val retryable = responseCode == 503
 
 ---
 
-### [ ] A-5. `X-Mock-Status` · `X-Mock-Delay-Ms` 미구현 · §6 ⭐ 최우선
+### [x] A-5. `X-Mock-Status` · `X-Mock-Delay-Ms` 미구현 · §6 ⭐ 최우선
 
 **위치** `JudgeApiService.kt:65-67` — `X-Mock-Verdict`만 설정합니다.
 
@@ -121,7 +121,7 @@ X-Mock-Status:  503          ×3  →  수동 모드 전환되면 안 됨 ❗
 
 ---
 
-### [ ] A-6. 토큰 하드코딩 · §2
+### [x] A-6. 토큰 하드코딩 · §2
 
 **위치** `JudgeApiService.kt:12`
 
@@ -141,7 +141,7 @@ X-Mock-Status:  503          ×3  →  수동 모드 전환되면 안 됨 ❗
 
 ## B. 3번(서버) 담당 — 2건
 
-### [ ] B-1. 요청 형식 오류가 400이 아니라 422 · §5
+### [x] B-1. 요청 형식 오류가 400이 아니라 422 · §5
 
 **위치** `server.py:191-199`
 
@@ -159,7 +159,7 @@ Pydantic 본문 검증이 함수 진입 **전에** 실행되어, 스키마 오�
 
 이미지 관련 400(`require_jpeg`, `server.py:105-113`)은 `check_auth` 이후라 정상입니다. **스키마 검증만 샙니다.**
 
-### [ ] B-2. 422 응답 본문이 계약과 다른 형태 · §5
+### [x] B-2. 422 응답 본문이 계약과 다른 형태 · §5
 
 계약 §5는 `{"detail": "사람이 읽을 수 있는 오류 설명"}` — **문자열**입니다.
 FastAPI 기본 422는 `{"detail": [ {...}, {...} ]}` — **배열**입니다.
@@ -168,9 +168,9 @@ FastAPI 기본 422는 `{"detail": [ {...}, {...} ]}` — **배열**입니다.
 
 ---
 
-## C. 권고 미이행 — 1건 (위반 아님)
+## C. 권고 이행 — 1건
 
-### [ ] C-1. `BASE_URL`이 하드코딩 · §1 💡
+### [x] C-1. `BASE_URL`이 하드코딩 · §1 💡
 
 **위치** `JudgeApiService.kt:11`
 

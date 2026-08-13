@@ -33,7 +33,20 @@ class AppPersistenceInstrumentedTest {
             phase = CookingPhase.JUDGING,
             currentStepIndex = 2,
             activeRequestId = "in-flight",
-            completedStepOrders = setOf(1, 2)
+            completedStepOrders = setOf(1, 2),
+            logs = listOf(
+                SessionLogEntry(
+                    timestampMs = 2_000L,
+                    stepOrder = 2,
+                    message = "판정",
+                    verdict = JudgmentVerdict.DONE,
+                    requestId = "request",
+                    requestedAtMs = 1_000L,
+                    respondedAtMs = 2_000L,
+                    imageUri = "file:///capture.jpg",
+                    groundTruth = JudgmentVerdict.NOT_DONE
+                )
+            )
         )
 
         persistence.saveRecipes(recipes)
@@ -45,5 +58,7 @@ class AppPersistenceInstrumentedTest {
         assertEquals(CookingPhase.WAITING_FOR_CHECK, restored?.phase)
         assertEquals(null, restored?.activeRequestId)
         assertEquals(setOf(1, 2), restored?.completedStepOrders)
+        assertEquals(1_000L, restored?.logs?.single()?.requestedAtMs)
+        assertEquals(JudgmentVerdict.NOT_DONE, restored?.logs?.single()?.groundTruth)
     }
 }

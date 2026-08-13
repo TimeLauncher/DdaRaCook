@@ -18,6 +18,7 @@ class FakeWearableCameraGateway(
 ) : WearableCameraGateway {
     private val mutableState = MutableStateFlow<WearableCameraState>(WearableCameraState.NotStarted)
     override val state: StateFlow<WearableCameraState> = mutableState.asStateFlow()
+    override val isFake: Boolean = true
 
     private val captureMutex = Mutex()
     private var behavior: FakeCaptureBehavior = FakeCaptureBehavior.Success()
@@ -139,6 +140,20 @@ class FakeWearableCameraGateway(
 
     override suspend fun release() {
         mutableState.value = WearableCameraState.Released
+    }
+
+    override suspend fun deleteArtifact(imageUri: String): ArtifactDeletionOutcome {
+        val uri = runCatching { Uri.parse(imageUri) }.getOrNull()
+            ?: return ArtifactDeletionOutcome.Failure("Invalid fake artifact URI")
+        if (uri.scheme != "file" || uri.path.isNullOrBlank()) {
+            return ArtifactDeletionOutcome.Failure("Fake artifact is not a file URI")
+        }
+        val file = File(requireNotNull(uri.path))
+        return when {
+            !file.exists() -> ArtifactDeletionOutcome.NotFound
+            file.delete() -> ArtifactDeletionOutcome.Deleted
+            else -> ArtifactDeletionOutcome.Failure("Fake artifact could not be deleted")
+        }
     }
 
     private suspend fun ensureSampleImageFile(): File {

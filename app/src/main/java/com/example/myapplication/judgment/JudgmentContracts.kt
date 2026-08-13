@@ -15,7 +15,8 @@ data class JudgmentRequest(
     val checkCondition: String?,
     val elapsedSeconds: Int,
     val baselineImageUri: String?,
-    val currentImageUri: String
+    val currentImageUri: String,
+    val requestedAtMs: Long = System.currentTimeMillis()
 )
 
 data class JudgmentResult(
@@ -25,7 +26,9 @@ data class JudgmentResult(
     val verdict: JudgmentVerdict,
     val reasonCode: ReasonCode,
     val roundTripMs: Long,
-    val vlmLatencyMs: Long? = null
+    val vlmLatencyMs: Long? = null,
+    val requestedAtMs: Long = 0L,
+    val respondedAtMs: Long = System.currentTimeMillis()
 )
 
 sealed interface JudgmentOutcome {
@@ -33,7 +36,9 @@ sealed interface JudgmentOutcome {
     data class Failure(
         val requestId: String,
         val message: String,
-        val retryable: Boolean
+        val retryable: Boolean,
+        val requestedAtMs: Long = 0L,
+        val respondedAtMs: Long = System.currentTimeMillis()
     ) : JudgmentOutcome
 }
 

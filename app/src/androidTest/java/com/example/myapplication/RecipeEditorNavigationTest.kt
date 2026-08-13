@@ -1,11 +1,19 @@
 package com.example.myapplication
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
 
+@RunWith(AndroidJUnit4::class)
 class RecipeEditorNavigationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
@@ -13,8 +21,10 @@ class RecipeEditorNavigationTest {
     @Test
     fun homeOpensRecipeEditor() {
         composeRule.onNodeWithText("내 레시피").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("김치볶음밥 대표 이미지").fetchSemanticsNode()
+        composeRule.onNodeWithText("레시피 추가").assertHeightIsAtLeast(48.dp)
         composeRule.onNodeWithText("레시피 추가").performClick()
         composeRule.onNodeWithText("레시피 제목").fetchSemanticsNode()
-        composeRule.onNodeWithText("단계 추가").fetchSemanticsNode()
+        assertTrue(composeRule.onAllNodesWithText("단계 추가").fetchSemanticsNodes().isNotEmpty())
     }
 }

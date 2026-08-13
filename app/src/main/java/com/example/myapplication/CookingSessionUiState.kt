@@ -29,6 +29,7 @@ data class CookingSessionUiState(
     val cameraState: WearableCameraState = WearableCameraState.NotStarted,
     val currentCaptureOutcome: CaptureOutcome? = null,
     val lastCaptureFailureKind: CaptureFailureKind? = null,
+    val consecutiveCameraTimeouts: Int = 0,
     val pendingAnnouncement: PendingAnnouncement? = null,
     val isListening: Boolean = false,
     val audioPermissionGranted: Boolean = false,
@@ -37,11 +38,19 @@ data class CookingSessionUiState(
     val judgingInFlight: Boolean = false,
     val judgeError: String? = null,
     val speechError: String? = null,
+    val lastVoiceTranscript: String? = null,
     val stepElapsedSeconds: Int = 0,
     val maxExpectedExceeded: Boolean = false,
     val hasResumableSession: Boolean = false,
+    val resumeAutoAfterDeviceSetup: Boolean = false,
+    val useFakeCamera: Boolean = true,
     val useMockJudgment: Boolean = true,
-    val selectedMockVerdict: JudgmentVerdict = JudgmentVerdict.DONE
+    val selectedMockVerdict: JudgmentVerdict = JudgmentVerdict.DONE,
+    val isLoading: Boolean = false,
+    val loadError: String? = null,
+    val serverReady: Boolean? = null,
+    val serverStatusMessage: String? = null,
+    val serverBaseUrl: String = ""
 ) {
     val selectedRecipe: Recipe?
         get() = recipes.firstOrNull { it.id == selectedRecipeId }
