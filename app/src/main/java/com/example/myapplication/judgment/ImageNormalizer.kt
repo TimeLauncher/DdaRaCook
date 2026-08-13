@@ -32,12 +32,14 @@ class ImageNormalizer(private val context: Context) {
             "판정 이미지를 디코딩할 수 없습니다."
         }
         val oriented = decoded.applyOrientation(orientation)
-        val cropped = oriented.centerCropWidth(MAX_SERVER_WIDTH)
+        val cropped = oriented.keepBottomPercent(BOTTOM_KEEP_PERCENT)
+        val scaled = cropped.scaleToMaxLongEdge(MAX_SERVER_LONG_EDGE)
         val output = ByteArrayOutputStream()
-        check(cropped.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) { "JPEG 정규화에 실패했습니다." }
+        check(scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) { "JPEG 정규화에 실패했습니다." }
         val bytes = output.toByteArray()
-        val outputWidth = cropped.width
-        val outputHeight = cropped.height
+        val outputWidth = scaled.width
+        val outputHeight = scaled.height
+        if (scaled !== cropped) scaled.recycle()
         if (cropped !== oriented) cropped.recycle()
         if (oriented !== decoded) oriented.recycle()
         decoded.recycle()
@@ -60,7 +62,8 @@ class ImageNormalizer(private val context: Context) {
     }
 
     private companion object {
-        const val MAX_SERVER_WIDTH = 1024
+        const val BOTTOM_KEEP_PERCENT = 60
+        const val MAX_SERVER_LONG_EDGE = 1024
         const val JPEG_QUALITY = 80
     }
 }
@@ -80,30 +83,63 @@ private fun Bitmap.applyOrientation(orientation: Int): Bitmap {
     return if (matrix.isIdentity) this else Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
 }
 
-private fun Bitmap.centerCropWidth(maxWidth: Int): Bitmap {
-    val crop = horizontalCenterCropBounds(width = width, height = height, maxWidth = maxWidth)
-    if (crop.width == width) return this
-    return Bitmap.createBitmap(this, crop.left, 0, crop.width, crop.height)
+private fun Bitmap.keepBottomPercent(keepPercent: Int): Bitmap {
+    val crop = bottomCropBounds(width = width, height = height, keepPercent = keepPercent)
+    if (crop.top == 0 && crop.height == height) return this
+    return Bitmap.createBitmap(this, 0, crop.top, crop.width, crop.height)
 }
 
-internal data class HorizontalCropBounds(
-    val left: Int,
+private fun Bitmap.scaleToMaxLongEdge(maxLongEdge: Int): Bitmap {
+    val output = scaledDimensions(width = width, height = height, maxLongEdge = maxLongEdge)
+    if (output.width == width && output.height == height) return this
+    return Bitmap.createScaledBitmap(this, output.width, output.height, true)
+}
+
+internal data class BottomCropBounds(
+    val top: Int,
     val width: Int,
     val height: Int
 )
 
-internal fun horizontalCenterCropBounds(
+internal data class ImageDimensions(
+    val width: Int,
+    val height: Int
+)
+
+internal fun bottomCropBounds(
     width: Int,
     height: Int,
-    maxWidth: Int = 1024
-): HorizontalCropBounds {
+    keepPercent: Int = 60
+): BottomCropBounds {
     require(width > 0 && height > 0) { "이미지 크기는 0보다 커야 합니다." }
-    require(maxWidth > 0) { "최대 가로폭은 0보다 커야 합니다." }
-    val croppedWidth = width.coerceAtMost(maxWidth)
-    return HorizontalCropBounds(
-        left = (width - croppedWidth) / 2,
-        width = croppedWidth,
-        height = height
+    require(keepPercent in 1..100) { "유지 비율은 1~100이어야 합니다." }
+    val retainedHeight = ((height.toLong() * keepPercent) / 100L)
+        .toInt()
+        .coerceAtLeast(1)
+    return BottomCropBounds(
+        top = height - retainedHeight,
+        width = width,
+        height = retainedHeight
+    )
+}
+
+internal fun scaledDimensions(
+    width: Int,
+    height: Int,
+    maxLongEdge: Int = 1024
+): ImageDimensions {
+    require(width > 0 && height > 0) { "이미지 크기는 0보다 커야 합니다." }
+    require(maxLongEdge > 0) { "최대 긴 변은 0보다 커야 합니다." }
+    val longEdge = maxOf(width, height)
+    if (longEdge <= maxLongEdge) return ImageDimensions(width, height)
+
+    fun scaled(value: Int): Int = ((value.toLong() * maxLongEdge + longEdge / 2L) / longEdge)
+        .toInt()
+        .coerceAtLeast(1)
+
+    return ImageDimensions(
+        width = scaled(width),
+        height = scaled(height)
     )
 }
 
@@ -111,4 +147,4 @@ private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(this)
     .joinToString("") { "%02x".format(it) }
 
-const val PIPELINE_VERSION = "center-x1024-jpeg80-exif-baked-v2"
+const val PIPELINE_VERSION = "bottom60-long1024-jpeg80-exif-baked-v3"

@@ -44,7 +44,7 @@ data class CookingSessionUiState(
     val hasResumableSession: Boolean = false,
     val resumeAutoAfterDeviceSetup: Boolean = false,
     val useFakeCamera: Boolean = true,
-    val useMockJudgment: Boolean = true,
+    val useMockJudgment: Boolean = false,
     val selectedMockVerdict: JudgmentVerdict = JudgmentVerdict.DONE,
     val isLoading: Boolean = false,
     val loadError: String? = null,
