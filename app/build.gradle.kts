@@ -37,7 +37,8 @@ android {
 
     defaultConfig {
         applicationId = "com.example.myapplication"
-        minSdk = 24
+        // DAT 0.9.0 AARs declare minSdk 29. The verified CameraAccess sample itself uses 31.
+        minSdk = 29
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -56,6 +57,19 @@ android {
             "JUDGE_TEAM_TOKEN",
             configurationValue(name = "TEAM_TOKEN", defaultValue = localTeamToken()).asBuildConfigString()
         )
+        buildConfigField(
+            "boolean",
+            "USE_FAKE_CAMERA",
+            configurationValue(name = "USE_FAKE_CAMERA", defaultValue = "false")
+                .toBooleanStrictOrNull()
+                ?.toString()
+                ?: "false"
+        )
+
+        // Official DAT Developer Mode sentinel. Production credentials must be supplied through
+        // non-tracked configuration before a non-Developer-Mode release.
+        manifestPlaceholders["mwdat_application_id"] = "0"
+        manifestPlaceholders["mwdat_client_token"] = "0"
     }
 
     buildTypes {
@@ -73,6 +87,9 @@ android {
         buildConfig = true
         compose = true
     }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
 }
 
 dependencies {
@@ -84,10 +101,19 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.mwdat.core)
+    implementation(libs.mwdat.camera)
+    implementation(libs.vosk.android)
+    implementation(libs.jna.android) {
+        artifact {
+            type = "aar"
+        }
+    }
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

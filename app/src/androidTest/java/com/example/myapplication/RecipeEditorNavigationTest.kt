@@ -2,15 +2,18 @@ package com.example.myapplication
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertHeightIsAtLeast
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import androidx.compose.ui.unit.dp
-import org.junit.Assert.assertTrue
+import org.junit.runner.RunWith
 
+@RunWith(AndroidJUnit4::class)
 class RecipeEditorNavigationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
