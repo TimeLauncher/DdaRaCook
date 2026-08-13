@@ -1,18 +1,24 @@
 package com.example.myapplication
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,6 +59,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,15 +67,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.myapplication.camera.CaptureArtifact
+import com.example.myapplication.camera.CaptureOutcome
 import com.example.myapplication.camera.WearableCameraState
+import com.example.myapplication.camera.DatCameraPermissionContract
+import com.example.myapplication.camera.datAndroidPermissions
 import com.example.myapplication.ui.theme.Ash
 import com.example.myapplication.ui.theme.AshDark
 import com.example.myapplication.ui.theme.Flame
@@ -79,7 +97,13 @@ import com.example.myapplication.ui.theme.MyApplicationTheme
 import com.example.myapplication.ui.theme.Pan
 import com.example.myapplication.ui.theme.PanDark
 import com.example.myapplication.ui.theme.Rim
+import com.example.myapplication.voice.WakeWordController
+import com.example.myapplication.voice.WakeWordStatus
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -99,23 +123,127 @@ private fun TtaraCookApp(
 ) {
     val uiState by sessionViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var appInForeground by remember { mutableStateOf(false) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, _ ->
+            appInForeground = lifecycleOwner.lifecycle.currentState
+                .isAtLeast(Lifecycle.State.STARTED)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        appInForeground = lifecycleOwner.lifecycle.currentState
+            .isAtLeast(Lifecycle.State.STARTED)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val wakeControllerHolder = remember { arrayOfNulls<WakeWordController>(1) }
+    val speechControllerHolder = remember { arrayOfNulls<SpeechController>(1) }
+    var wakeWordStatus by remember { mutableStateOf(WakeWordStatus("음성 호출 준비 전")) }
     val speechController = rememberSpeechController(
         context = context,
         onTranscript = sessionViewModel::handleVoiceTranscript,
         onListeningChanged = sessionViewModel::setListening,
-        onError = sessionViewModel::onSpeechError
+        onError = sessionViewModel::onSpeechError,
+        onRecognitionFinished = {
+            speechControllerHolder[0]?.recognitionFinished()
+        },
+        onCommandRecognitionUseChanged = { active ->
+            if (active) wakeControllerHolder[0]?.pause() else wakeControllerHolder[0]?.resume()
+        }
+    )
+    speechControllerHolder[0] = speechController
+    val wakeWordController = remember(context, speechController) {
+        WakeWordController(
+            context = context,
+            onWakeWord = {
+                speechController.speak(
+                    message = "네.",
+                    onStart = speechController::startListening
+                )
+            },
+            onStatus = { wakeWordStatus = it }
+        )
+    }
+    DisposableEffect(wakeWordController) {
+        wakeControllerHolder[0] = wakeWordController
+        onDispose {
+            if (wakeControllerHolder[0] === wakeWordController) {
+                wakeControllerHolder[0] = null
+            }
+            wakeWordController.release()
+        }
+    }
+    val voiceScreenActive = uiState.currentScreen in setOf(
+        AppScreen.S5_COOKING,
+        AppScreen.S6_STEP_DONE,
+        AppScreen.S7_NEEDS_VIEW,
+        AppScreen.S8_MANUAL
     )
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = sessionViewModel::onAudioPermissionResult
     )
+    var wakePermissionRequested by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        sessionViewModel.onAudioPermissionResult(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val datAndroidPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { result ->
+            sessionViewModel.initializeDatCamera(result.values.all { it })
+        }
+    )
+    val wearableCameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = DatCameraPermissionContract(),
+        onResult = sessionViewModel::onWearableCameraPermissionResult
+    )
+
+    LaunchedEffect(uiState.currentScreen, uiState.useFakeCamera) {
+        if (!uiState.useFakeCamera && uiState.currentScreen == AppScreen.S4_DEVICE) {
+            datAndroidPermissionLauncher.launch(datAndroidPermissions)
+        }
+    }
+
+    LaunchedEffect(voiceScreenActive, uiState.audioPermissionGranted, appInForeground) {
+        if (
+            appInForeground &&
+            voiceScreenActive &&
+            !uiState.audioPermissionGranted &&
+            !wakePermissionRequested
+        ) {
+            wakePermissionRequested = true
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    LaunchedEffect(
+        voiceScreenActive,
+        uiState.audioPermissionGranted,
+        appInForeground,
+        wakeWordController
+    ) {
+        if (appInForeground && voiceScreenActive && uiState.audioPermissionGranted) {
+            wakeWordController.activate()
+        } else {
+            wakeWordController.deactivate()
+        }
+    }
 
     LaunchedEffect(uiState.pendingAnnouncement?.id) {
         uiState.pendingAnnouncement?.message?.let { speechController.speak(it) }
     }
 
-    DisposableEffect(Unit) {
-        onDispose { speechController.release() }
+    DisposableEffect(speechController) {
+        onDispose {
+            if (speechControllerHolder[0] === speechController) {
+                speechControllerHolder[0] = null
+            }
+            speechController.release()
+        }
     }
 
     Scaffold(containerColor = Ink) { innerPadding ->
@@ -148,7 +276,16 @@ private fun TtaraCookApp(
 
                 AppScreen.S4_DEVICE -> DeviceScreen(
                     uiState = uiState,
-                    onAdvance = sessionViewModel::advanceFakeDeviceState,
+                    onAdvance = {
+                        if (
+                            !uiState.useFakeCamera &&
+                            uiState.cameraState == WearableCameraState.PermissionRequired
+                        ) {
+                            wearableCameraPermissionLauncher.launch(Unit)
+                        } else {
+                            (context as? Activity)?.let(sessionViewModel::advanceDeviceSetup)
+                        }
+                    },
                     onDisconnect = sessionViewModel::simulateDeviceDisconnect,
                     onError = sessionViewModel::simulateDeviceError,
                     onStartWithoutGlasses = sessionViewModel::startWithoutGlasses,
@@ -157,6 +294,7 @@ private fun TtaraCookApp(
 
                 AppScreen.S5_COOKING -> CookingScreen(
                     uiState = uiState,
+                    wakeWordStatus = wakeWordStatus,
                     onStartInspection = sessionViewModel::triggerImmediateInspection,
                     onManualNext = sessionViewModel::continueToNextStep,
                     onNotYet = sessionViewModel::keepCurrentStepAndReschedule,
@@ -180,6 +318,7 @@ private fun TtaraCookApp(
 
                 AppScreen.S6_STEP_DONE -> StepDoneScreen(
                     uiState = uiState,
+                    wakeWordStatus = wakeWordStatus,
                     onContinue = sessionViewModel::continueToNextStep,
                     onUndo = sessionViewModel::moveToPreviousStep,
                     onVoice = {
@@ -189,12 +328,14 @@ private fun TtaraCookApp(
 
                 AppScreen.S7_NEEDS_VIEW -> NeedsViewScreen(
                     uiState = uiState,
+                    wakeWordStatus = wakeWordStatus,
                     onRetry = sessionViewModel::triggerImmediateInspection,
                     onNext = sessionViewModel::continueToNextStep
                 )
 
                 AppScreen.S8_MANUAL -> ManualModeScreen(
                     uiState = uiState,
+                    wakeWordStatus = wakeWordStatus,
                     onResumeAuto = sessionViewModel::resumeAutoMode,
                     onNext = sessionViewModel::continueToNextStep,
                     onRepeat = sessionViewModel::repeatCurrentStep,
@@ -231,7 +372,16 @@ private fun HomeScreen(
             Spacer(modifier = Modifier.height(8.dp))
             Text("내 레시피", color = Flour, fontSize = 30.sp, fontWeight = FontWeight.Black)
             Spacer(modifier = Modifier.height(8.dp))
-            Text("대표 레시피 1종과 Fake Gateway로 자동 검사 흐름을 검증합니다.", color = Ash, fontSize = 14.sp, lineHeight = 22.sp)
+            Text(
+                if (uiState.useFakeCamera) {
+                    "대표 레시피 1종과 Fake Gateway로 자동 검사 흐름을 검증합니다."
+                } else {
+                    "Meta 안경으로 필요한 순간에만 촬영해 조리 단계를 확인합니다."
+                },
+                color = Ash,
+                fontSize = 14.sp,
+                lineHeight = 22.sp
+            )
             Spacer(modifier = Modifier.height(20.dp))
             if (uiState.hasResumableSession && uiState.session != null) {
                 StatusBanner(
@@ -524,13 +674,29 @@ private fun DeviceScreen(
             )
             Spacer(modifier = Modifier.height(18.dp))
             if (uiState.cameraState == WearableCameraState.Ready) {
-                PrimaryButton(label = "1단계 시작", onClick = onStartCooking)
+                PrimaryButton(
+                    label = if (uiState.resumeAutoAfterDeviceSetup) "자동 확인 재개" else "1단계 시작",
+                    onClick = onStartCooking
+                )
                 Spacer(modifier = Modifier.height(10.dp))
-                GhostButton(label = "연결 끊김 시뮬레이션", onClick = onDisconnect)
+                if (uiState.useFakeCamera) {
+                    GhostButton(label = "연결 끊김 시뮬레이션", onClick = onDisconnect)
+                }
             } else {
-                PrimaryButton(label = "다음 연결 단계", onClick = onAdvance)
-                Spacer(modifier = Modifier.height(10.dp))
-                GhostButton(label = "오류 시뮬레이션", onClick = onError)
+                PrimaryButton(
+                    label = when {
+                        uiState.useFakeCamera -> "다음 연결 단계"
+                        uiState.cameraState == WearableCameraState.PermissionRequired -> "카메라 권한 허용"
+                        uiState.cameraState == WearableCameraState.NotStarted -> "안경 등록"
+                        else -> "연결 다시 준비"
+                    },
+                    onClick = onAdvance,
+                    enabled = uiState.cameraState != WearableCameraState.Registering
+                )
+                if (uiState.useFakeCamera) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    GhostButton(label = "오류 시뮬레이션", onClick = onError)
+                }
                 Spacer(modifier = Modifier.height(10.dp))
                 GhostButton(label = "안경 없이 시작", onClick = onStartWithoutGlasses)
             }
@@ -541,6 +707,7 @@ private fun DeviceScreen(
 @Composable
 private fun CookingScreen(
     uiState: CookingSessionUiState,
+    wakeWordStatus: WakeWordStatus,
     onStartInspection: () -> Unit,
     onManualNext: () -> Unit,
     onNotYet: () -> Unit,
@@ -599,12 +766,15 @@ private fun CookingScreen(
                 SmallGhostButton("확인해줘", onStartInspection)
                 SmallGhostButton("자동 확인 끄기", onDisableAuto)
             }
-            Spacer(modifier = Modifier.height(14.dp))
-            ControlRow("Fake Capture") {
-                SmallGhostButton("Success", onUseSuccessCapture)
-                SmallGhostButton("BUSY", onUseBusyCapture)
-                SmallGhostButton("Disconnect", onUseDisconnectCapture)
-                SmallGhostButton("Failure", onUseFailureCapture)
+            WakeWordStatusText(wakeWordStatus)
+            if (uiState.useFakeCamera) {
+                Spacer(modifier = Modifier.height(14.dp))
+                ControlRow("Fake Capture") {
+                    SmallGhostButton("Success", onUseSuccessCapture)
+                    SmallGhostButton("BUSY", onUseBusyCapture)
+                    SmallGhostButton("Disconnect", onUseDisconnectCapture)
+                    SmallGhostButton("Failure", onUseFailureCapture)
+                }
             }
             Spacer(modifier = Modifier.height(14.dp))
             ControlRow("Fake Verdict") {
@@ -617,9 +787,20 @@ private fun CookingScreen(
             Spacer(modifier = Modifier.height(18.dp))
             PrimaryButton(label = "검사 시작", onClick = onStartInspection)
             Spacer(modifier = Modifier.height(14.dp))
+            (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.let {
+                CapturedPhotoCard(it.artifact, isFakeCamera = uiState.useFakeCamera)
+                Spacer(modifier = Modifier.height(14.dp))
+            }
             if (uiState.currentCaptureOutcome != null || uiState.judgeError != null) {
                 InfoCard(title = "최근 결과") {
-                    Text(uiState.currentCaptureOutcome.toString(), color = Flour, fontSize = 11.sp, lineHeight = 18.sp)
+                    val captureMessage = when (val outcome = uiState.currentCaptureOutcome) {
+                        is CaptureOutcome.Success -> "촬영 성공 · 판정 입력 이미지 저장 완료"
+                        is CaptureOutcome.Failure -> "${outcome.kind} · ${outcome.userMessage}"
+                        null -> null
+                    }
+                    captureMessage?.let {
+                        Text(it, color = Flour, fontSize = 11.sp, lineHeight = 18.sp)
+                    }
                     if (uiState.judgeError != null) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(uiState.judgeError, color = Color(0xFFE5C04A), fontSize = 11.sp)
@@ -634,6 +815,10 @@ private fun CookingScreen(
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(it, color = Color(0xFFE5C04A), fontSize = 12.sp)
             }
+            uiState.lastVoiceTranscript?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("최근 음성 인식: $it", color = Ash, fontSize = 12.sp)
+            }
         }
     }
 }
@@ -641,6 +826,7 @@ private fun CookingScreen(
 @Composable
 private fun StepDoneScreen(
     uiState: CookingSessionUiState,
+    wakeWordStatus: WakeWordStatus,
     onContinue: () -> Unit,
     onUndo: () -> Unit,
     onVoice: () -> Unit
@@ -659,12 +845,17 @@ private fun StepDoneScreen(
                 detail = "자동 DONE ${session.autoDoneCount}회 · 다음 단계로 이동할 수 있습니다.",
                 tone = BannerTone.Success
             )
+            (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.let {
+                Spacer(modifier = Modifier.height(14.dp))
+                CapturedPhotoCard(it.artifact, isFakeCamera = uiState.useFakeCamera, compact = true)
+            }
             Spacer(modifier = Modifier.height(18.dp))
             PrimaryButton(label = "다음 단계", onClick = onContinue)
             Spacer(modifier = Modifier.height(10.dp))
             GhostButton(label = "이전 단계로 복귀", onClick = onUndo)
             Spacer(modifier = Modifier.height(10.dp))
             VoiceButton(uiState, onVoice)
+            WakeWordStatusText(wakeWordStatus)
         }
     }
 }
@@ -672,6 +863,7 @@ private fun StepDoneScreen(
 @Composable
 private fun NeedsViewScreen(
     uiState: CookingSessionUiState,
+    wakeWordStatus: WakeWordStatus,
     onRetry: () -> Unit,
     onNext: () -> Unit
 ) {
@@ -696,6 +888,7 @@ private fun NeedsViewScreen(
             PrimaryButton(label = "즉시 재검사", onClick = onRetry)
             Spacer(modifier = Modifier.height(10.dp))
             GhostButton(label = "수동으로 다음", onClick = onNext)
+            WakeWordStatusText(wakeWordStatus)
         }
     }
 }
@@ -703,6 +896,7 @@ private fun NeedsViewScreen(
 @Composable
 private fun ManualModeScreen(
     uiState: CookingSessionUiState,
+    wakeWordStatus: WakeWordStatus,
     onResumeAuto: () -> Unit,
     onNext: () -> Unit,
     onRepeat: () -> Unit,
@@ -735,6 +929,7 @@ private fun ManualModeScreen(
             GhostButton(label = "이전 단계", onClick = onPrevious)
             Spacer(modifier = Modifier.height(10.dp))
             VoiceButton(uiState, onVoice)
+            WakeWordStatusText(wakeWordStatus)
         }
     }
 }
@@ -768,14 +963,12 @@ private fun SummaryScreen(
             }
             val longest = recipe.steps.mapNotNull { step -> session.stepDurationMs(step.order)?.let { step.order to it } }.maxByOrNull { it.second }
             longest?.let { SummaryRow("가장 오래 걸린 단계", "${it.first}단계 · ${formatDuration(it.second)}") }
-            if (session.lastCaptureUriByStep.isNotEmpty()) {
+            if (
+                session.baselineUriByStep.isNotEmpty() ||
+                session.lastCaptureUriByStep.isNotEmpty()
+            ) {
+                SessionPhotoGallery(recipe = recipe, session = session)
                 Spacer(modifier = Modifier.height(18.dp))
-                InfoCard("단계별 대표 캡처") {
-                    session.lastCaptureUriByStep.toSortedMap().forEach { (stepOrder, _) ->
-                        Text("${stepOrder}단계 · 캡처 보관 중", color = Flour, fontSize = 12.sp)
-                    }
-                }
-                Spacer(modifier = Modifier.height(10.dp))
                 GhostButton("세션 이미지 삭제", onDeleteImages)
             }
             Spacer(modifier = Modifier.height(18.dp))
@@ -787,6 +980,85 @@ private fun SummaryScreen(
             Spacer(modifier = Modifier.height(18.dp))
             PrimaryButton(label = "완료", onClick = onDone)
         }
+    }
+}
+
+@Composable
+private fun SessionPhotoGallery(recipe: Recipe, session: CookingSession) {
+    Text("단계별 촬영 기록", color = Flour, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+    Spacer(modifier = Modifier.height(10.dp))
+    recipe.steps.forEach { step ->
+        StepPhotoGallery(
+            step = step,
+            baselineUri = session.baselineUriByStep[step.order],
+            latestUri = session.lastCaptureUriByStep[step.order]
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+    }
+}
+
+@Composable
+private fun StepPhotoGallery(
+    step: RecipeStep,
+    baselineUri: String?,
+    latestUri: String?
+) {
+    InfoCard(title = "${step.order}단계 · ${step.instruction}") {
+        when {
+            baselineUri == null && latestUri == null ->
+                Text("촬영 기록 없음", color = Ash, fontSize = 12.sp)
+
+            baselineUri != null && baselineUri == latestUri ->
+                UriPhoto(uri = baselineUri, label = "기준 사진")
+
+            else -> {
+                baselineUri?.let {
+                    UriPhoto(uri = it, label = "단계 시작 기준 사진")
+                }
+                if (baselineUri != null && latestUri != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+                latestUri?.let {
+                    UriPhoto(uri = it, label = "마지막 확인 사진")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UriPhoto(uri: String, label: String) {
+    val context = LocalContext.current
+    val loaded by produceState(
+        initialValue = CaptureImageLoad(),
+        key1 = uri
+    ) {
+        val image = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(Uri.parse(uri))?.use { input ->
+                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+        value = CaptureImageLoad(image = image, complete = true)
+    }
+
+    Text(label, color = Herb, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    Spacer(modifier = Modifier.height(6.dp))
+    when {
+        loaded.image != null -> Image(
+            bitmap = checkNotNull(loaded.image),
+            contentDescription = label,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp)
+                .clip(RoundedCornerShape(12.dp)),
+            contentScale = ContentScale.Crop
+        )
+        loaded.complete ->
+            Text("사진 파일을 불러올 수 없습니다.", color = Color(0xFFE5C04A), fontSize = 12.sp)
+        else ->
+            Text("사진을 불러오는 중...", color = Ash, fontSize = 12.sp)
     }
 }
 
@@ -854,6 +1126,67 @@ private fun InfoCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
+private data class CaptureImageLoad(
+    val image: ImageBitmap? = null,
+    val complete: Boolean = false
+)
+
+@Composable
+private fun CapturedPhotoCard(
+    artifact: CaptureArtifact,
+    isFakeCamera: Boolean,
+    compact: Boolean = false
+) {
+    val context = LocalContext.current
+    val loaded by produceState(
+        initialValue = CaptureImageLoad(),
+        key1 = artifact.imageUri
+    ) {
+        val image = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(Uri.parse(artifact.imageUri))?.use { input ->
+                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+        value = CaptureImageLoad(image = image, complete = true)
+    }
+
+    InfoCard(title = "최근 촬영 사진") {
+        when {
+            loaded.image != null -> Image(
+                bitmap = checkNotNull(loaded.image),
+                contentDescription = "안경으로 최근 촬영한 조리 상태",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (compact) 160.dp else 240.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop
+            )
+            loaded.complete -> Text("촬영 파일을 화면에서 열 수 없습니다.", color = Color(0xFFE5C04A), fontSize = 12.sp)
+            else -> Text("촬영 사진을 불러오는 중...", color = Ash, fontSize = 12.sp)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            if (isFakeCamera) "Fake 카메라 이미지" else "실제 Meta 안경 촬영",
+            color = if (isFakeCamera) Color(0xFFE5C04A) else Herb,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            "${artifact.width ?: "-"}×${artifact.height ?: "-"} · ${formatFileSize(artifact.byteSize)} · " +
+                SimpleDateFormat("HH:mm:ss", Locale.KOREA).format(Date(artifact.capturedAtEpochMs)),
+            color = Ash,
+            fontSize = 11.sp
+        )
+        Text(
+            "첫 프레임 ${artifact.streamStartupLatencyMs ?: "-"}ms · 전체 촬영 ${artifact.totalCaptureLatencyMs}ms",
+            color = Ash,
+            fontSize = 11.sp
+        )
+    }
+}
+
 @Composable
 private fun StatusBanner(title: String, detail: String, tone: BannerTone) {
     val background = when (tone) {
@@ -916,6 +1249,24 @@ private fun VoiceButton(uiState: CookingSessionUiState, onClick: () -> Unit) {
         label = if (uiState.isListening) "듣는 중..." else if (uiState.audioPermissionGranted) "음성 입력" else "마이크 권한 요청",
         onClick = onClick
     )
+}
+
+@Composable
+private fun WakeWordStatusText(status: WakeWordStatus) {
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        text = "음성 호출: ${status.message}",
+        color = if (status.error) Color(0xFFE5C04A) else if (status.listening) Herb else Ash,
+        fontSize = 12.sp,
+        lineHeight = 18.sp
+    )
+    status.downloadPercent?.let { percent ->
+        Spacer(modifier = Modifier.height(6.dp))
+        LinearProgressIndicator(
+            progress = { percent / 100f },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -1031,17 +1382,78 @@ private enum class BannerTone {
 private class SpeechController(
     private val textToSpeech: TextToSpeech?,
     private val speechRecognizer: SpeechRecognizer?,
-    private val context: Context,
     private val onTranscript: (String) -> Unit,
     private val onListeningChanged: (Boolean) -> Unit,
-    private val onError: (String) -> Unit
+    private val onError: (String) -> Unit,
+    private val onCommandRecognitionUseChanged: (Boolean) -> Unit
 ) {
-    fun speak(message: String) {
-        textToSpeech?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "ttara-cook")
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val startCallbacks = mutableMapOf<String, () -> Unit>()
+    private val completionCallbacks = mutableMapOf<String, () -> Unit>()
+    private var utteranceSequence = 0L
+    private var activeUtteranceId: String? = null
+    private var recognitionActive = false
+    private var reportedRecognitionActive = false
+
+    init {
+        textToSpeech?.setOnUtteranceProgressListener(
+            object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    if (utteranceId == null) return
+                    mainHandler.post {
+                        startCallbacks.remove(utteranceId)?.invoke()
+                    }
+                }
+
+                override fun onDone(utteranceId: String?) {
+                    completeUtterance(utteranceId, runCompletion = true)
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    completeUtterance(utteranceId, runCompletion = true)
+                }
+
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    completeUtterance(utteranceId, runCompletion = true)
+                }
+
+                override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                    completeUtterance(utteranceId, runCompletion = false)
+                }
+            }
+        )
+    }
+
+    fun speak(
+        message: String,
+        onStart: (() -> Unit)? = null,
+        onDone: (() -> Unit)? = null
+    ) {
+        val tts = textToSpeech
+        if (tts == null) {
+            onStart?.invoke()
+            onDone?.invoke()
+            return
+        }
+        utteranceSequence += 1
+        val utteranceId = "ttara-cook-$utteranceSequence"
+        activeUtteranceId = utteranceId
+        if (onStart != null) startCallbacks[utteranceId] = onStart
+        if (onDone != null) completionCallbacks[utteranceId] = onDone
+        // Keep the wake-word detector running during TTS so the user can interrupt
+        // an announcement by saying "따라쿡". QUEUE_FLUSH below replaces that
+        // announcement with the short acknowledgement when the wake word fires.
+        val result = tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        if (result == TextToSpeech.ERROR) {
+            startCallbacks.remove(utteranceId)?.invoke()
+            completeUtterance(utteranceId, runCompletion = true)
+        }
     }
 
     fun startListening() {
-        if (speechRecognizer == null) {
+        val recognizer = speechRecognizer
+        if (recognizer == null) {
             onError("이 기기에서는 음성 인식을 사용할 수 없습니다.")
             return
         }
@@ -1049,14 +1461,53 @@ private class SpeechController(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.KOREAN.toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_000L)
         }
+        recognitionActive = true
+        reportRecognitionUse()
         onListeningChanged(true)
-        speechRecognizer.startListening(intent)
+        runCatching { recognizer.startListening(intent) }
+            .onFailure { error ->
+                onListeningChanged(false)
+                recognitionActive = false
+                reportRecognitionUse()
+                onError("음성 인식을 시작하지 못했습니다: ${error.message ?: error.javaClass.simpleName}")
+            }
     }
 
     fun release() {
+        startCallbacks.clear()
+        completionCallbacks.clear()
+        activeUtteranceId = null
+        recognitionActive = false
+        runCatching { speechRecognizer?.cancel() }
         speechRecognizer?.destroy()
         textToSpeech?.shutdown()
+    }
+
+    private fun completeUtterance(utteranceId: String?, runCompletion: Boolean) {
+        if (utteranceId == null) return
+        mainHandler.post {
+            startCallbacks.remove(utteranceId)
+            val callback = completionCallbacks.remove(utteranceId)
+            if (activeUtteranceId != utteranceId) return@post
+            activeUtteranceId = null
+            if (runCompletion && callback != null) {
+                callback()
+            }
+        }
+    }
+
+    fun recognitionFinished() {
+        recognitionActive = false
+        reportRecognitionUse()
+    }
+
+    private fun reportRecognitionUse() {
+        if (reportedRecognitionActive == recognitionActive) return
+        reportedRecognitionActive = recognitionActive
+        onCommandRecognitionUseChanged(recognitionActive)
     }
 }
 
@@ -1065,7 +1516,9 @@ private fun rememberSpeechController(
     context: Context,
     onTranscript: (String) -> Unit,
     onListeningChanged: (Boolean) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    onRecognitionFinished: () -> Unit,
+    onCommandRecognitionUseChanged: (Boolean) -> Unit
 ): SpeechController {
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     var recognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
@@ -1090,12 +1543,18 @@ private fun rememberSpeechController(
                     }
                     override fun onError(error: Int) {
                         onListeningChanged(false)
-                        onError("음성 인식에 실패했습니다. 화면 버튼을 사용하거나 다시 시도하세요.")
+                        onRecognitionFinished()
+                        onError("음성 인식에 실패했습니다(코드 $error). 화면 버튼을 사용하거나 다시 시도하세요.")
                     }
                     override fun onResults(results: Bundle?) {
                         onListeningChanged(false)
                         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                        if (!text.isNullOrBlank()) onTranscript(text)
+                        if (!text.isNullOrBlank()) {
+                            onTranscript(text)
+                        } else {
+                            onError("음성을 인식하지 못했습니다. 다시 말해주세요.")
+                        }
+                        onRecognitionFinished()
                     }
                     override fun onPartialResults(partialResults: Bundle?) = Unit
                     override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -1113,7 +1572,14 @@ private fun rememberSpeechController(
     }
 
     return remember(tts, recognizer) {
-        SpeechController(tts, recognizer, context, onTranscript, onListeningChanged, onError)
+        SpeechController(
+            textToSpeech = tts,
+            speechRecognizer = recognizer,
+            onTranscript = onTranscript,
+            onListeningChanged = onListeningChanged,
+            onError = onError,
+            onCommandRecognitionUseChanged = onCommandRecognitionUseChanged
+        )
     }
 }
 
@@ -1122,6 +1588,12 @@ private fun formatDuration(durationMs: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return if (minutes > 0) "${minutes}분 ${seconds}초" else "${seconds}초"
+}
+
+private fun formatFileSize(byteSize: Long): String = when {
+    byteSize >= 1_048_576L -> String.format(Locale.KOREA, "%.2fMB", byteSize / 1_048_576.0)
+    byteSize >= 1_024L -> String.format(Locale.KOREA, "%.0fKB", byteSize / 1_024.0)
+    else -> "${byteSize}B"
 }
 
 @Preview(showBackground = true, showSystemUi = true)
