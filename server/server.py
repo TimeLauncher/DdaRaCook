@@ -36,12 +36,27 @@ from judge import (
     looks_like_jpeg,
 )
 
-DEBUG_MODE = os.getenv("DEBUG_MODE", "true").lower() == "true"
-TEAM_TOKEN = os.getenv("TEAM_TOKEN", "cookassist-dev-change-me")
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+TEAM_TOKEN = os.getenv("TEAM_TOKEN", "")
 BACKEND_NAME = os.getenv("VLM_BACKEND", "nemotron")
 PROMPT_VERSION = prompts.PROMPT_VERSION
 
 app = FastAPI(title="Cooking Assistant Judge API", version="1.0.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(request: Request, exc: RequestValidationError):
+    """계약 §5에 맞춰 본문 스키마 오류를 400 + 문자열 detail로 반환한다."""
+    try:
+        check_auth(request.headers.get("Authorization"))
+    except HTTPException as auth_error:
+        return JSONResponse(status_code=auth_error.status_code, content={"detail": str(auth_error.detail)})
+
+    messages = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ()) if part != "body") or "body"
+        messages.append(f"{location}: {error.get('msg', '잘못된 값')}")
+    return JSONResponse(status_code=400, content={"detail": "; ".join(messages) or "요청 형식 오류입니다"})
 
 
 # ══════════════════════════════════════════════════════════
@@ -77,6 +92,8 @@ class JudgeResponse(BaseModel):
 
 # ══════════════════════════════════════════════════════════
 def check_auth(authorization: Optional[str]):
+    if not TEAM_TOKEN:
+        raise HTTPException(500, "TEAM_TOKEN 서버 설정이 필요합니다")
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Authorization: Bearer <token> 헤더가 필요합니다")
     if authorization[7:] != TEAM_TOKEN:
@@ -195,7 +212,7 @@ def health():
         "NVIDIA_API_KEY": is_set("NVIDIA_API_KEY"),
         "NVIDIA_BASE_URL": is_set("NVIDIA_BASE_URL"),
         "NVIDIA_MODEL": is_set("NVIDIA_MODEL"),
-        "TEAM_TOKEN": TEAM_TOKEN != "cookassist-dev-change-me",
+        "TEAM_TOKEN": bool(TEAM_TOKEN),
     }
 
     # 어댑터를 실제로 만들어 본다. 키가 없으면 여기서 잡힌다.

@@ -1,6 +1,7 @@
 package com.example.myapplication
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myapplication.camera.CaptureFailureKind
@@ -14,41 +15,147 @@ import com.example.myapplication.judgment.FakeJudgmentBehavior
 import com.example.myapplication.judgment.FakeJudgmentGateway
 import com.example.myapplication.judgment.JudgmentOutcome
 import com.example.myapplication.judgment.JudgmentRequest
+import com.example.myapplication.judgment.JudgeApiService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
+import java.io.File
 
 class CookingSessionViewModel(
     application: Application
 ) : AndroidViewModel(application) {
+    private val persistence = AppPersistence(application)
     private val cameraGateway = FakeWearableCameraGateway(application)
-    private val judgmentGateway = FakeJudgmentGateway()
-    private val initialRecipes = RecipeFixtures.sampleRecipes().filter { it.id == "kimchi" } +
+    private val fakeJudgmentGateway = FakeJudgmentGateway()
+    private val networkJudgmentGateway = JudgeApiService(application)
+    private val fixtureRecipes = RecipeFixtures.sampleRecipes().filter { it.id == "kimchi" } +
         RecipeFixtures.sampleRecipes().filter { it.id != "kimchi" }
+    private val initialRecipes = persistence.loadRecipes(fixtureRecipes)
+    private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
+    private val restoredSession = persistence.loadSession()?.takeIf { saved ->
+        initialRecipes.any { it.id == saved.recipeId } && saved.phase != CookingPhase.SESSION_COMPLETED
+    }
 
     private val mutableUiState = MutableStateFlow(
         CookingSessionUiState(
             recipes = initialRecipes,
-            selectedRecipeId = initialRecipes.first().id
+            selectedRecipeId = restoredSession?.recipeId ?: initialRecipes.first().id,
+            session = restoredSession,
+            hasResumableSession = restoredSession != null,
+            serverBaseUrl = initialServerBaseUrl
         )
     )
     val uiState: StateFlow<CookingSessionUiState> = mutableUiState.asStateFlow()
 
+    init {
+        networkJudgmentGateway.updateBaseUrl(initialServerBaseUrl)
+    }
+
     private var announcementId = 0L
     private var inspectionCountdownJob: Job? = null
     private var inspectionExecutionJob: Job? = null
+    private var elapsedTickerJob: Job? = null
+    private var autoAdvanceJob: Job? = null
 
     init {
         viewModelScope.launch {
             cameraGateway.state.collectLatest { state ->
                 mutableUiState.update { it.copy(cameraState = state) }
             }
+        }
+        viewModelScope.launch {
+            uiState.collect { state ->
+                persistence.saveSession(state.session)
+            }
+        }
+    }
+
+    fun openRecipeEditor(recipeId: String? = null) {
+        cancelInspectionWork()
+        mutableUiState.update {
+            it.copy(
+                selectedRecipeId = recipeId ?: "",
+                currentScreen = AppScreen.S3_RECIPE_EDITOR,
+                session = null,
+                hasResumableSession = false
+            )
+        }
+    }
+
+    fun saveRecipe(recipe: Recipe) {
+        if (recipe.validationErrors().isNotEmpty()) return
+        val normalized = recipe.copy(
+            id = recipe.id.ifBlank { "recipe-${UUID.randomUUID()}" },
+            steps = recipe.steps.mapIndexed { index, step -> step.copy(order = index + 1) }
+        )
+        val recipes = uiState.value.recipes.toMutableList().apply {
+            val index = indexOfFirst { it.id == normalized.id }
+            if (index >= 0) set(index, normalized) else add(normalized)
+        }
+        persistence.saveRecipes(recipes)
+        mutableUiState.update {
+            it.copy(
+                recipes = recipes,
+                selectedRecipeId = normalized.id,
+                currentScreen = AppScreen.S2_RECIPE_DETAIL
+            )
+        }
+    }
+
+    fun cancelRecipeEditor() {
+        mutableUiState.update {
+            it.copy(currentScreen = if (it.selectedRecipeId.isBlank()) AppScreen.S1_HOME else AppScreen.S2_RECIPE_DETAIL)
+        }
+    }
+
+    fun deleteSessionImages() {
+        mutableUiState.update { state ->
+            val session = state.session ?: return@update state
+            (session.lastCaptureUriByStep.values + session.baselineUriByStep.values)
+                .distinct()
+                .forEach { value ->
+                    val uri = Uri.parse(value)
+                    if (uri.scheme == "file") runCatching { File(requireNotNull(uri.path)).delete() }
+                }
+            state.copy(
+                session = session.copy(
+                    lastCaptureUriByStep = emptyMap(),
+                    baselineUriByStep = emptyMap(),
+                    logs = session.logs.map { it.copy(imageUri = null) }
+                )
+            )
+        }
+    }
+
+    fun recordGroundTruth(requestId: String, verdict: JudgmentVerdict) {
+        mutableUiState.update { state ->
+            val session = state.session ?: return@update state
+            state.copy(session = session.copy(logs = session.logs.map { log ->
+                if (log.requestId == requestId && log.verdict != null) log.copy(groundTruth = verdict) else log
+            }))
+        }
+    }
+
+    fun resumeSavedSession() {
+        val session = uiState.value.session ?: return
+        mutableUiState.update {
+            it.copy(
+                selectedRecipeId = session.recipeId,
+                currentScreen = screenForSession(session),
+                hasResumableSession = false,
+                session = session.copy(activeRequestId = null)
+            )
+        }
+        startElapsedTicker()
+        if (session.mode == SessionMode.AUTO && session.phase == CookingPhase.WAITING_FOR_CHECK) {
+            scheduleInspection(uiState.value.currentStep?.inspectionPolicy?.checkIntervalSeconds ?: 10)
         }
     }
 
@@ -69,7 +176,8 @@ class CookingSessionViewModel(
 
     fun backToHome() {
         cancelInspectionWork()
-        mutableUiState.update { it.copy(currentScreen = AppScreen.S1_HOME, session = null, nextInspectionInSeconds = null) }
+        persistence.saveSession(null)
+        mutableUiState.update { it.copy(currentScreen = AppScreen.S1_HOME, session = null, hasResumableSession = false, nextInspectionInSeconds = null) }
     }
 
     fun openDevicePreparation() {
@@ -162,6 +270,14 @@ class CookingSessionViewModel(
         announceCurrent(step.voicePrompt)
     }
 
+    fun disableAutoMode() {
+        transitionToManualMode("자동 확인을 껐습니다. 화면 버튼이나 음성으로 진행할 수 있어요.")
+    }
+
+    fun onSpeechError(message: String) {
+        mutableUiState.update { it.copy(isListening = false, speechError = message) }
+    }
+
     fun triggerImmediateInspection() {
         val state = uiState.value
         val session = state.session ?: return
@@ -175,22 +291,46 @@ class CookingSessionViewModel(
     }
 
     fun continueToNextStep() {
+        advanceToNextStep(manual = true)
+    }
+
+    private fun advanceToNextStep(manual: Boolean) {
         val state = uiState.value
         val recipe = state.selectedRecipe ?: return
-        val session = state.session ?: return
+        val originalSession = state.session ?: return
+        val now = System.currentTimeMillis()
+        val session = if (manual) {
+            originalSession.copy(
+                completedStepOrders = originalSession.completedStepOrders + (originalSession.currentStepIndex + 1),
+                stepCompletedAtMsByOrder = originalSession.stepCompletedAtMsByOrder + ((originalSession.currentStepIndex + 1) to now),
+                logs = originalSession.logs + SessionLogEntry(
+                    timestampMs = now,
+                    stepOrder = originalSession.currentStepIndex + 1,
+                    message = "사용자 직접 완료",
+                    eventType = "MANUAL_OVERRIDE",
+                    manualOverride = true,
+                    overrideType = "MANUAL_NEXT"
+                )
+            )
+        } else originalSession
         val nextIndex = session.currentStepIndex + 1
         if (nextIndex >= recipe.steps.size) {
             cancelInspectionWork()
             mutableUiState.update {
                 it.copy(
                     currentScreen = AppScreen.S9_SUMMARY,
-                    session = session.copy(phase = CookingPhase.SESSION_COMPLETED)
+                    session = session.copy(
+                        phase = CookingPhase.SESSION_COMPLETED,
+                        completedAtMs = System.currentTimeMillis(),
+                        completedStepOrders = session.completedStepOrders + (session.currentStepIndex + 1)
+                    )
                 )
             }
             announceCurrent("${recipe.title} 조리가 끝났습니다.")
             return
         }
-        startStep(nextIndex, manualOnly = session.mode == SessionMode.MANUAL_ONLY, manualIncrement = true)
+        if (session !== originalSession) mutableUiState.update { it.copy(session = session) }
+        startStep(nextIndex, manualOnly = session.mode == SessionMode.MANUAL_ONLY, manualIncrement = manual)
     }
 
     fun moveToPreviousStep() {
@@ -198,8 +338,17 @@ class CookingSessionViewModel(
         if (session.currentStepIndex == 0) return
         val updated = session.copy(
             currentStepIndex = session.currentStepIndex - 1,
-            undoDoneCount = session.undoDoneCount + 1,
-            phase = if (session.mode == SessionMode.MANUAL_ONLY) CookingPhase.MANUAL_MODE else CookingPhase.STEP_STARTING
+            undoDoneCount = session.undoDoneCount + if (session.phase == CookingPhase.STEP_COMPLETED) 1 else 0,
+            consecutiveDoneCount = 0,
+            phase = if (session.mode == SessionMode.MANUAL_ONLY) CookingPhase.MANUAL_MODE else CookingPhase.STEP_STARTING,
+            logs = session.logs + SessionLogEntry(
+                timestampMs = System.currentTimeMillis(),
+                stepOrder = session.currentStepIndex + 1,
+                message = "이전 단계 복귀",
+                eventType = "MANUAL_OVERRIDE",
+                manualOverride = true,
+                overrideType = "UNDO_DONE"
+            )
         )
         mutableUiState.update { it.copy(session = updated, currentScreen = if (session.mode == SessionMode.MANUAL_ONLY) AppScreen.S8_MANUAL else AppScreen.S5_COOKING) }
         startStep(updated.currentStepIndex, manualOnly = updated.mode == SessionMode.MANUAL_ONLY, keepCounts = true)
@@ -220,6 +369,19 @@ class CookingSessionViewModel(
     fun resumeAutoMode() {
         val session = uiState.value.session ?: return
         val currentIndex = session.currentStepIndex
+        if (!uiState.value.useMockJudgment) {
+            viewModelScope.launch {
+                mutableUiState.update { it.copy(serverReady = null, serverStatusMessage = "판정 서버 상태 확인 중") }
+                val health = networkJudgmentGateway.checkHealth()
+                mutableUiState.update { it.copy(serverReady = health.ready, serverStatusMessage = health.message) }
+                if (health.ready) resumeAutoModeAfterCheck(session, currentIndex)
+            }
+            return
+        }
+        resumeAutoModeAfterCheck(session, currentIndex)
+    }
+
+    private fun resumeAutoModeAfterCheck(session: CookingSession, currentIndex: Int) {
         mutableUiState.update {
             it.copy(
                 currentScreen = AppScreen.S5_COOKING,
@@ -243,19 +405,68 @@ class CookingSessionViewModel(
 
     fun handleVoiceTranscript(text: String) {
         setListening(false)
-        val normalized = text.trim().lowercase()
-        when {
-            "다음" in normalized -> continueToNextStep()
-            "아직" in normalized -> keepCurrentStepAndReschedule()
-            "다시" in normalized -> repeatCurrentStep()
-            "이전" in normalized -> moveToPreviousStep()
-            "확인" in normalized -> triggerImmediateInspection()
-            "자동 확인 다시" in normalized || "자동확인 다시" in normalized -> resumeAutoMode()
+        mutableUiState.update { it.copy(speechError = null) }
+        val screen = uiState.value.currentScreen
+        val command = parseVoiceCommand(text)
+        if (command == null || !isVoiceCommandAllowed(command, screen)) {
+            onSpeechError("현재 화면에서 사용할 수 있는 음성 명령이 아닙니다.")
+            return
+        }
+        when (command) {
+            VoiceCommand.INGREDIENTS -> announceIngredients()
+            VoiceCommand.VERIFY_INGREDIENT, VoiceCommand.CHECK_NOW -> triggerImmediateInspection()
+            VoiceCommand.CURRENT_STEP -> announceCurrentStep()
+            VoiceCommand.RESUME_AUTO -> resumeAutoMode()
+            VoiceCommand.NEXT -> continueToNextStep()
+            VoiceCommand.NOT_YET -> keepCurrentStepAndReschedule()
+            VoiceCommand.REPEAT -> repeatCurrentStep()
+            VoiceCommand.PREVIOUS -> moveToPreviousStep()
         }
     }
 
+    private fun announceIngredients() {
+        val recipe = uiState.value.selectedRecipe ?: return
+        val message = recipe.ingredients.joinToString(", ") { "${it.name} ${it.amount}" }
+        announceCurrent(limitAnnouncement("재료는 $message 입니다."))
+    }
+
+    private fun announceCurrentStep() {
+        val step = uiState.value.currentStep ?: return
+        val total = uiState.value.selectedRecipe?.steps?.size ?: return
+        announceCurrent("현재 ${step.order}단계, 전체 ${total}단계입니다. ${step.instruction}")
+    }
+
     fun setMockJudgmentEnabled(enabled: Boolean) {
-        mutableUiState.update { it.copy(useMockJudgment = enabled) }
+        mutableUiState.update {
+            it.copy(
+                useMockJudgment = enabled,
+                serverReady = if (enabled) null else it.serverReady,
+                serverStatusMessage = if (enabled) null else "실제 서버를 사용하기 전에 연결 상태를 확인합니다."
+            )
+        }
+        if (!enabled) checkServerHealth()
+    }
+
+    fun checkServerHealth() {
+        viewModelScope.launch {
+            mutableUiState.update { it.copy(serverReady = null, serverStatusMessage = "판정 서버 상태 확인 중") }
+            val health = networkJudgmentGateway.checkHealth()
+            mutableUiState.update { it.copy(serverReady = health.ready, serverStatusMessage = health.message) }
+        }
+    }
+
+    fun setServerBaseUrl(value: String) {
+        mutableUiState.update { it.copy(serverBaseUrl = value, serverReady = null, serverStatusMessage = null) }
+    }
+
+    fun applyServerBaseUrl() {
+        val value = uiState.value.serverBaseUrl
+        if (!networkJudgmentGateway.updateBaseUrl(value)) {
+            mutableUiState.update { it.copy(serverReady = false, serverStatusMessage = "http 또는 https 서버 주소를 입력해 주세요.") }
+            return
+        }
+        persistence.saveServerBaseUrl(value.trim().trimEnd('/'))
+        checkServerHealth()
     }
 
     fun setMockVerdict(verdict: JudgmentVerdict) {
@@ -296,7 +507,8 @@ class CookingSessionViewModel(
         super.onCleared()
         cancelInspectionWork()
         viewModelScope.launch { cameraGateway.release() }
-        viewModelScope.launch { judgmentGateway.release() }
+        viewModelScope.launch { fakeJudgmentGateway.release() }
+        viewModelScope.launch { networkJudgmentGateway.release() }
     }
 
     private fun startStep(
@@ -310,6 +522,7 @@ class CookingSessionViewModel(
         val recipe = state.selectedRecipe ?: return
         val previous = state.session ?: createFreshSession(recipeId = recipe.id)
         val step = recipe.steps[stepIndex]
+        val now = System.currentTimeMillis()
         val session = previous.copy(
             recipeId = recipe.id,
             phase = CookingPhase.STEP_STARTING,
@@ -317,8 +530,12 @@ class CookingSessionViewModel(
             currentStepIndex = stepIndex,
             manualNextCount = if (manualIncrement) previous.manualNextCount + 1 else previous.manualNextCount,
             cannotTellStreak = if (keepCounts) previous.cannotTellStreak else 0,
+            consecutiveDoneCount = 0,
+            networkFailureCount = 0,
             currentVerdict = null,
             activeRequestId = null,
+            currentStepStartedAtMs = now,
+            stepStartedAtMsByOrder = previous.stepStartedAtMsByOrder + (step.order to now),
             logs = previous.logs + SessionLogEntry(
                 timestampMs = System.currentTimeMillis(),
                 stepOrder = step.order,
@@ -335,6 +552,7 @@ class CookingSessionViewModel(
             )
         }
         announceCurrent(step.voicePrompt)
+        startElapsedTicker()
         if (manualOnly || !step.isAutoCheck) {
             mutableUiState.update { ui -> ui.copy(session = session.copy(phase = if (manualOnly) CookingPhase.MANUAL_MODE else CookingPhase.WAITING_FOR_CHECK)) }
             return
@@ -474,7 +692,7 @@ class CookingSessionViewModel(
                 val recipe = state.selectedRecipe ?: return
                 val step = state.currentStep ?: return
                 if (state.useMockJudgment) {
-                    judgmentGateway.setBehavior(
+                    fakeJudgmentGateway.setBehavior(
                         FakeJudgmentBehavior.Success(
                             verdict = state.selectedMockVerdict,
                             reasonCode = when (state.selectedMockVerdict) {
@@ -485,6 +703,7 @@ class CookingSessionViewModel(
                         )
                     )
                 }
+                val judgmentGateway = if (state.useMockJudgment) fakeJudgmentGateway else networkJudgmentGateway
                 val judgmentOutcome = judgmentGateway.judge(
                     JudgmentRequest(
                         requestId = request.requestId,
@@ -494,7 +713,9 @@ class CookingSessionViewModel(
                         instruction = step.instruction,
                         checkType = step.checkType,
                         checkCondition = step.checkCondition,
-                        elapsedSeconds = step.inspectionPolicy?.earliestCheckSeconds ?: 0,
+                        elapsedSeconds = state.session?.let {
+                            ((System.currentTimeMillis() - it.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
+                        } ?: 0,
                         baselineImageUri = state.session?.baselineUriByStep?.get(step.order),
                         currentImageUri = outcome.artifact.imageUri
                     )
@@ -505,6 +726,14 @@ class CookingSessionViewModel(
     }
 
     private fun handleJudgmentOutcome(outcome: JudgmentOutcome) {
+        val current = uiState.value
+        val activeSession = current.session ?: return
+        val outcomeRequestId = when (outcome) {
+            is JudgmentOutcome.Failure -> outcome.requestId
+            is JudgmentOutcome.Success -> outcome.result.requestId
+        }
+        if (activeSession.activeRequestId != outcomeRequestId) return
+        if (outcome is JudgmentOutcome.Success && !isCurrentJudgment(activeSession, current.currentStep?.order, outcome.result)) return
         when (outcome) {
             is JudgmentOutcome.Failure -> {
                 mutableUiState.update {
@@ -513,18 +742,24 @@ class CookingSessionViewModel(
                         judgingInFlight = false,
                         judgeError = outcome.message,
                         session = session.copy(
-                            phase = CookingPhase.WAITING_FOR_CHECK,
+                            phase = if (outcome.retryable) CookingPhase.NETWORK_RETRY else CookingPhase.WAITING_FOR_CHECK,
+                            networkFailureCount = session.networkFailureCount + if (outcome.retryable) 1 else 0,
                             activeRequestId = null,
                             logs = session.logs + SessionLogEntry(
                                 timestampMs = System.currentTimeMillis(),
                                 stepOrder = currentStepOrder(session),
-                                message = "판정 실패: ${outcome.message}"
+                                message = "판정 실패: ${outcome.message}",
+                                requestId = outcome.requestId,
+                                eventType = "NETWORK_FAILURE",
+                                requestedAtMs = outcome.requestedAtMs,
+                                respondedAtMs = outcome.respondedAtMs,
+                                imageUri = session.lastCaptureUriByStep[currentStepOrder(session)]
                             )
                         )
                     )
                 }
                 val step = uiState.value.currentStep ?: return
-                scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                if (outcome.retryable) scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
             }
 
             is JudgmentOutcome.Success -> {
@@ -539,6 +774,32 @@ class CookingSessionViewModel(
         val step = state.currentStep ?: return
         when (result.verdict) {
             JudgmentVerdict.DONE -> {
+                val required = step.inspectionPolicy?.requiredConsecutiveDone?.coerceAtLeast(1) ?: 1
+                val streak = session.consecutiveDoneCount + 1
+                if (streak < required) {
+                    mutableUiState.update {
+                        it.copy(
+                            currentScreen = AppScreen.S5_COOKING,
+                            judgingInFlight = false,
+                            session = session.copy(
+                                phase = CookingPhase.WAITING_FOR_CHECK,
+                                consecutiveDoneCount = streak,
+                                cannotTellStreak = 0,
+                                networkFailureCount = 0,
+                                currentVerdict = result.verdict,
+                                activeRequestId = null,
+                                lastRoundTripMs = result.roundTripMs,
+                                lastVlmLatencyMs = result.vlmLatencyMs,
+                                lastReasonCode = result.reasonCode,
+                                logs = session.logs + judgmentLog(step.order, result, "DONE $streak/$required")
+                            )
+                        )
+                    }
+                    announceCurrent("완료 상태를 한 번 더 확인할게요.")
+                    scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                    return
+                }
+                val completedAt = System.currentTimeMillis()
                 mutableUiState.update {
                     it.copy(
                         currentScreen = AppScreen.S6_STEP_DONE,
@@ -546,22 +807,26 @@ class CookingSessionViewModel(
                         session = session.copy(
                             phase = CookingPhase.STEP_COMPLETED,
                             autoDoneCount = session.autoDoneCount + 1,
+                            consecutiveDoneCount = streak,
                             cannotTellStreak = 0,
+                            networkFailureCount = 0,
                             currentVerdict = result.verdict,
+                            activeRequestId = null,
                             lastRoundTripMs = result.roundTripMs,
                             lastVlmLatencyMs = result.vlmLatencyMs,
-                            logs = session.logs + SessionLogEntry(
-                                timestampMs = System.currentTimeMillis(),
-                                stepOrder = step.order,
-                                message = "DONE",
-                                verdict = result.verdict,
-                                roundTripMs = result.roundTripMs,
-                                vlmLatencyMs = result.vlmLatencyMs
-                            )
+                            lastReasonCode = result.reasonCode,
+                            completedStepOrders = session.completedStepOrders + step.order,
+                            stepCompletedAtMsByOrder = session.stepCompletedAtMsByOrder + (step.order to completedAt),
+                            logs = session.logs + judgmentLog(step.order, result, "DONE")
                         )
                     )
                 }
                 announceCurrent("${step.order}단계 완료. 다음 단계로 넘어갈게요.")
+                autoAdvanceJob?.cancel()
+                autoAdvanceJob = viewModelScope.launch {
+                    delay(2_000L)
+                    if (uiState.value.currentScreen == AppScreen.S6_STEP_DONE) advanceToNextStep(manual = false)
+                }
             }
 
             JudgmentVerdict.NOT_DONE -> {
@@ -572,17 +837,14 @@ class CookingSessionViewModel(
                         session = session.copy(
                             phase = CookingPhase.WAITING_FOR_CHECK,
                             notDoneCount = session.notDoneCount + 1,
+                            consecutiveDoneCount = 0,
+                            networkFailureCount = 0,
                             currentVerdict = result.verdict,
+                            activeRequestId = null,
                             lastRoundTripMs = result.roundTripMs,
                             lastVlmLatencyMs = result.vlmLatencyMs,
-                            logs = session.logs + SessionLogEntry(
-                                timestampMs = System.currentTimeMillis(),
-                                stepOrder = step.order,
-                                message = "NOT_DONE",
-                                verdict = result.verdict,
-                                roundTripMs = result.roundTripMs,
-                                vlmLatencyMs = result.vlmLatencyMs
-                            )
+                            lastReasonCode = result.reasonCode,
+                            logs = session.logs + judgmentLog(step.order, result, "NOT_DONE")
                         )
                     )
                 }
@@ -591,8 +853,7 @@ class CookingSessionViewModel(
 
             JudgmentVerdict.CANNOT_TELL -> {
                 val streak = session.cannotTellStreak + 1
-                val nextPhase = if (streak >= 3) CookingPhase.MANUAL_MODE else CookingPhase.NEEDS_VIEW
-                val nextScreen = if (streak >= 3) AppScreen.S8_MANUAL else AppScreen.S7_NEEDS_VIEW
+                val (nextPhase, nextScreen) = cannotTellDestination(streak)
                 mutableUiState.update {
                     it.copy(
                         currentScreen = nextScreen,
@@ -600,18 +861,15 @@ class CookingSessionViewModel(
                         session = session.copy(
                             phase = nextPhase,
                             cannotTellStreak = streak,
+                            consecutiveDoneCount = 0,
+                            networkFailureCount = 0,
                             cannotTellCount = session.cannotTellCount + 1,
                             currentVerdict = result.verdict,
+                            activeRequestId = null,
                             lastRoundTripMs = result.roundTripMs,
                             lastVlmLatencyMs = result.vlmLatencyMs,
-                            logs = session.logs + SessionLogEntry(
-                                timestampMs = System.currentTimeMillis(),
-                                stepOrder = step.order,
-                                message = "CANNOT_TELL",
-                                verdict = result.verdict,
-                                roundTripMs = result.roundTripMs,
-                                vlmLatencyMs = result.vlmLatencyMs
-                            )
+                            lastReasonCode = result.reasonCode,
+                            logs = session.logs + judgmentLog(step.order, result, "CANNOT_TELL")
                         )
                     )
                 }
@@ -643,7 +901,7 @@ class CookingSessionViewModel(
     private fun announceCurrent(message: String) {
         announcementId += 1
         mutableUiState.update {
-            it.copy(pendingAnnouncement = PendingAnnouncement(announcementId, message))
+            it.copy(pendingAnnouncement = PendingAnnouncement(announcementId, limitAnnouncement(message)))
         }
     }
 
@@ -652,7 +910,43 @@ class CookingSessionViewModel(
         inspectionExecutionJob?.cancel()
         inspectionCountdownJob = null
         inspectionExecutionJob = null
+        autoAdvanceJob?.cancel()
+        autoAdvanceJob = null
     }
+
+    private fun startElapsedTicker() {
+        elapsedTickerJob?.cancel()
+        elapsedTickerJob = viewModelScope.launch {
+            while (true) {
+                val state = uiState.value
+                val session = state.session ?: break
+                val step = state.currentStep ?: break
+                val elapsed = ((System.currentTimeMillis() - session.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
+                val maximum = step.inspectionPolicy?.maxExpectedSeconds ?: Int.MAX_VALUE
+                mutableUiState.update { it.copy(stepElapsedSeconds = elapsed, maxExpectedExceeded = elapsed > maximum) }
+                delay(1_000L)
+            }
+        }
+    }
+
+    private fun judgmentLog(
+        stepOrder: Int,
+        result: com.example.myapplication.judgment.JudgmentResult,
+        message: String
+    ) = SessionLogEntry(
+        timestampMs = System.currentTimeMillis(),
+        stepOrder = stepOrder,
+        message = message,
+        verdict = result.verdict,
+        roundTripMs = result.roundTripMs,
+        vlmLatencyMs = result.vlmLatencyMs,
+        reasonCode = result.reasonCode,
+        requestId = result.requestId,
+        eventType = "JUDGMENT",
+        requestedAtMs = result.requestedAtMs,
+        respondedAtMs = result.respondedAtMs,
+        imageUri = uiState.value.session?.lastCaptureUriByStep?.get(stepOrder)
+    )
 
     private fun createFreshSession(
         recipeId: String = uiState.value.selectedRecipeId,
@@ -668,4 +962,56 @@ class CookingSessionViewModel(
     }
 
     private fun currentStepOrder(session: CookingSession): Int = session.currentStepIndex + 1
+
+    private fun screenForSession(session: CookingSession): AppScreen = when (session.phase) {
+        CookingPhase.MANUAL_MODE -> AppScreen.S8_MANUAL
+        CookingPhase.NEEDS_VIEW -> AppScreen.S7_NEEDS_VIEW
+        CookingPhase.STEP_COMPLETED -> AppScreen.S6_STEP_DONE
+        CookingPhase.SESSION_COMPLETED -> AppScreen.S9_SUMMARY
+        else -> AppScreen.S5_COOKING
+    }
 }
+
+internal fun limitAnnouncement(message: String): String = message
+    .split(Regex("(?<=[.!?。！？])\\s+"))
+    .filter(String::isNotBlank)
+    .take(2)
+    .joinToString(" ")
+
+internal fun isCurrentJudgment(
+    session: CookingSession,
+    currentStepOrder: Int?,
+    result: com.example.myapplication.judgment.JudgmentResult
+): Boolean = session.activeRequestId == result.requestId &&
+    session.id == result.cookingSessionId &&
+    currentStepOrder == result.stepOrder
+
+internal fun parseVoiceCommand(text: String): VoiceCommand? {
+    val normalized = text.trim().lowercase()
+    return when {
+        "재료" in normalized -> VoiceCommand.INGREDIENTS
+        "이거 맞아" in normalized || "이게 맞아" in normalized -> VoiceCommand.VERIFY_INGREDIENT
+        "몇 단계" in normalized || "몇단계" in normalized -> VoiceCommand.CURRENT_STEP
+        "자동 확인 다시" in normalized || "자동확인 다시" in normalized -> VoiceCommand.RESUME_AUTO
+        "다음" in normalized -> VoiceCommand.NEXT
+        "아직" in normalized -> VoiceCommand.NOT_YET
+        "다시" in normalized -> VoiceCommand.REPEAT
+        "이전" in normalized -> VoiceCommand.PREVIOUS
+        "확인" in normalized -> VoiceCommand.CHECK_NOW
+        else -> null
+    }
+}
+
+internal fun isVoiceCommandAllowed(command: VoiceCommand, screen: AppScreen): Boolean = when (command) {
+    VoiceCommand.INGREDIENTS, VoiceCommand.CURRENT_STEP -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S7_NEEDS_VIEW, AppScreen.S8_MANUAL)
+    VoiceCommand.VERIFY_INGREDIENT, VoiceCommand.CHECK_NOW -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S7_NEEDS_VIEW)
+    VoiceCommand.RESUME_AUTO -> screen == AppScreen.S8_MANUAL
+    VoiceCommand.NEXT -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S7_NEEDS_VIEW, AppScreen.S8_MANUAL)
+    VoiceCommand.NOT_YET -> screen == AppScreen.S5_COOKING
+    VoiceCommand.REPEAT -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S8_MANUAL)
+    VoiceCommand.PREVIOUS -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S8_MANUAL)
+}
+
+internal fun cannotTellDestination(streak: Int): Pair<CookingPhase, AppScreen> =
+    if (streak >= 3) CookingPhase.MANUAL_MODE to AppScreen.S8_MANUAL
+    else CookingPhase.NEEDS_VIEW to AppScreen.S7_NEEDS_VIEW

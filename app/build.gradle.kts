@@ -1,7 +1,33 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
+
+val localProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.isFile) {
+        propertiesFile.inputStream().use(::load)
+    }
+}
+
+fun configurationValue(name: String, defaultValue: String = ""): String =
+    providers.environmentVariable(name).orNull
+        ?: localProperties.getProperty(name)
+        ?: defaultValue
+
+fun localTeamToken(): String {
+    val tokenFile = rootProject.file("server/서버 토큰.md")
+    if (!tokenFile.isFile) return ""
+    return Regex("cookassist-[A-Za-z0-9_-]+")
+        .find(tokenFile.readText())
+        ?.value
+        .orEmpty()
+}
+
+fun String.asBuildConfigString(): String =
+    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.example.myapplication"
@@ -17,6 +43,19 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField(
+            "String",
+            "JUDGE_BASE_URL",
+            configurationValue(
+                name = "JUDGE_BASE_URL",
+                defaultValue = "https://ddaracook-server.onrender.com"
+            ).asBuildConfigString()
+        )
+        buildConfigField(
+            "String",
+            "JUDGE_TEAM_TOKEN",
+            configurationValue(name = "TEAM_TOKEN", defaultValue = localTeamToken()).asBuildConfigString()
+        )
     }
 
     buildTypes {
@@ -31,6 +70,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }
