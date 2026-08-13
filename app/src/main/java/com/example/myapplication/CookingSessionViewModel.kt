@@ -32,6 +32,9 @@ import java.util.UUID
 
 private const val AUTO_ADVANCE_DELAY_MS = 2_000L
 private const val MAX_CONSECUTIVE_CAMERA_TIMEOUTS = 2
+private const val REQUIRED_CAPTURE_MAX_ATTEMPTS = 3
+private const val REQUIRED_CAPTURE_RETRY_DELAY_MS = 3_000L
+private const val NEXT_COMMAND_DEBOUNCE_MS = 3_000L
 
 class CookingSessionViewModel(
     application: Application
@@ -46,8 +49,9 @@ class CookingSessionViewModel(
     private val networkJudgmentGateway = JudgeApiService(application)
     private val fixtureRecipes = RecipeFixtures.sampleRecipes().filter { it.id == "kimchi" } +
         RecipeFixtures.sampleRecipes().filter { it.id != "kimchi" }
-    private val initialRecipes = persistence.loadRecipes(fixtureRecipes)
+    private val initialRecipes = persistence.loadRecipes(fixtureRecipes).withAutomaticInspectionInterval()
     private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
+    private val initialUseMockJudgment = persistence.loadUseMockJudgment(fallback = false)
     private val restoredSession = persistence.loadSession()?.takeIf { saved ->
         initialRecipes.any { it.id == saved.recipeId } && saved.phase != CookingPhase.SESSION_COMPLETED
     }
@@ -59,6 +63,7 @@ class CookingSessionViewModel(
             session = restoredSession,
             hasResumableSession = restoredSession != null,
             useFakeCamera = cameraGateway.isFake,
+            useMockJudgment = initialUseMockJudgment,
             deviceHint = if (cameraGateway.isFake) {
                 "가짜 안경 게이트웨이를 사용 중입니다."
             } else {
@@ -70,7 +75,9 @@ class CookingSessionViewModel(
     val uiState: StateFlow<CookingSessionUiState> = mutableUiState.asStateFlow()
 
     init {
+        persistence.saveRecipes(initialRecipes)
         networkJudgmentGateway.updateBaseUrl(initialServerBaseUrl)
+        if (!initialUseMockJudgment) checkServerHealth()
     }
 
     private var announcementId = 0L
@@ -80,6 +87,7 @@ class CookingSessionViewModel(
     private var elapsedTickerJob: Job? = null
     private var autoAdvanceJob: Job? = null
     private var pendingManualInspectionStepOrder: Int? = null
+    private var lastNextCommandAtMs = 0L
 
     init {
         viewModelScope.launch {
@@ -187,7 +195,7 @@ class CookingSessionViewModel(
         }
         startElapsedTicker()
         if (session.mode == SessionMode.AUTO && session.phase == CookingPhase.WAITING_FOR_CHECK) {
-            scheduleInspection(uiState.value.currentStep?.inspectionPolicy?.checkIntervalSeconds ?: 10)
+            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
         }
     }
 
@@ -359,11 +367,21 @@ class CookingSessionViewModel(
 
     fun triggerImmediateInspection() {
         val state = uiState.value
-        val session = state.session ?: return
+        var session = state.session ?: return
         val step = state.currentStep ?: return
         if (session.mode == SessionMode.MANUAL_ONLY) {
-            announceCurrent("현재는 안경 없이 진행 중이라 카메라로 확인할 수 없습니다.")
-            return
+            if (state.cameraState != WearableCameraState.Ready) {
+                announceCurrent("안경 카메라가 준비되지 않아 바로 촬영할 수 없습니다. 연결을 확인해주세요.")
+                return
+            }
+            session = session.copy(
+                mode = SessionMode.AUTO,
+                phase = CookingPhase.WAITING_FOR_CHECK,
+                cannotTellStreak = 0
+            )
+            mutableUiState.update {
+                it.copy(currentScreen = AppScreen.S5_COOKING, session = session)
+            }
         }
         when (session.phase) {
             CookingPhase.STEP_STARTING -> {
@@ -395,8 +413,25 @@ class CookingSessionViewModel(
     }
 
     fun continueToNextStep() {
-        val session = uiState.value.session ?: return
-        if (session.phase in setOf(CookingPhase.STEP_STARTING, CookingPhase.CAPTURING, CookingPhase.JUDGING)) return
+        val state = uiState.value
+        var session = state.session ?: return
+        if (session.phase == CookingPhase.STEP_STARTING) {
+            announceCurrent(
+                "현재 ${session.currentStepIndex + 1}단계 기준 촬영을 준비하고 있습니다. " +
+                    "촬영이 끝날 때까지 기다려주세요."
+            )
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastNextCommandAtMs < NEXT_COMMAND_DEBOUNCE_MS) {
+            announceCurrent("다음 단계 요청을 이미 처리하고 있습니다.")
+            return
+        }
+        lastNextCommandAtMs = now
+        if (session.mode == SessionMode.MANUAL_ONLY && state.cameraState == WearableCameraState.Ready) {
+            session = session.copy(mode = SessionMode.AUTO, phase = CookingPhase.WAITING_FOR_CHECK)
+            mutableUiState.update { it.copy(currentScreen = AppScreen.S5_COOKING, session = session) }
+        }
         val wasAutomaticallyCompleted =
             session.phase == CookingPhase.STEP_COMPLETED && session.currentVerdict == JudgmentVerdict.DONE
         advanceToNextStep(manual = !wasAutomaticallyCompleted)
@@ -471,7 +506,7 @@ class CookingSessionViewModel(
                 session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK)
             )
         }
-        scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+        scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
     }
 
     fun resumeAutoMode() {
@@ -558,6 +593,7 @@ class CookingSessionViewModel(
     }
 
     fun setMockJudgmentEnabled(enabled: Boolean) {
+        persistence.saveUseMockJudgment(enabled)
         mutableUiState.update {
             it.copy(
                 useMockJudgment = enabled,
@@ -714,13 +750,15 @@ class CookingSessionViewModel(
                 if (runPendingManualInspection) {
                     triggerImmediateInspection()
                 } else {
-                    scheduleInspection(step.inspectionPolicy?.earliestCheckSeconds ?: 10)
+                    scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
                 }
-            } else if (
-                current.lastCaptureFailureKind == CaptureFailureKind.STREAM_TIMEOUT &&
-                current.consecutiveCameraTimeouts < MAX_CONSECUTIVE_CAMERA_TIMEOUTS
-            ) {
-                launchBaselineCapture(step, cookingSessionId)
+            } else {
+                val failure = current.currentCaptureOutcome as? CaptureOutcome.Failure
+                transitionToManualMode(
+                    "기준 사진 촬영을 완료하지 못했습니다. " +
+                        "${failure?.userMessage ?: "안경 카메라를 확인해주세요."} " +
+                        "연결을 확인한 뒤 자동 확인 다시를 말해주세요."
+                )
             }
         }
     }
@@ -735,7 +773,7 @@ class CookingSessionViewModel(
             purpose = CapturePurpose.BASELINE,
             burstDurationMs = step.inspectionPolicy?.burstSeconds?.times(1_000L) ?: 3_000L
         )
-        val outcome = cameraGateway.capture(request)
+        val outcome = captureRequiredWithRetry(request, "기준 사진 촬영")
         when (outcome) {
             is CaptureOutcome.Success -> {
                 mutableUiState.update {
@@ -764,14 +802,41 @@ class CookingSessionViewModel(
                         consecutiveCameraTimeouts = timeoutCount
                     )
                 }
-                if (
-                    outcome.kind != CaptureFailureKind.STREAM_TIMEOUT ||
-                    timeoutCount >= MAX_CONSECUTIVE_CAMERA_TIMEOUTS
-                ) {
-                    handleCameraFailure(outcome)
-                }
                 return false
             }
+        }
+    }
+
+    private suspend fun captureRequiredWithRetry(
+        request: CaptureRequest,
+        label: String
+    ): CaptureOutcome {
+        var attempt = 1
+        while (true) {
+            val outcome = cameraGateway.capture(request)
+            if (outcome is CaptureOutcome.Success) {
+                return outcome
+            }
+            val failure = outcome as CaptureOutcome.Failure
+            if (!failure.retryable || attempt >= REQUIRED_CAPTURE_MAX_ATTEMPTS) return failure
+            announceCurrent(
+                "$label ${attempt}회차에 실패했습니다. ${failure.userMessage} " +
+                    "${REQUIRED_CAPTURE_RETRY_DELAY_MS / 1_000L}초 후 다시 촬영하겠습니다."
+            )
+            delay(REQUIRED_CAPTURE_RETRY_DELAY_MS)
+            val current = uiState.value
+            if (
+                current.session?.id != request.cookingSessionId ||
+                current.currentStep?.order != request.stepOrder
+            ) {
+                return CaptureOutcome.Failure(
+                    requestId = request.requestId,
+                    kind = CaptureFailureKind.CANCELLED,
+                    retryable = false,
+                    userMessage = "단계가 변경되어 재촬영을 취소했습니다."
+                )
+            }
+            attempt += 1
         }
     }
 
@@ -794,19 +859,12 @@ class CookingSessionViewModel(
         val session = state.session ?: return
         val step = state.currentStep ?: return
         if (session.mode == SessionMode.MANUAL_ONLY) return
-        val cameraSettleMs = (cameraGateway as? DatWearableCameraGateway)
-            ?.remainingCameraSettleMs()
-            ?: 0L
         mutableUiState.update {
             it.copy(
                 currentScreen = AppScreen.S5_COOKING,
                 session = session.copy(phase = CookingPhase.PROMPTING_USER),
                 nextInspectionInSeconds = null
             )
-        }
-        if (cameraSettleMs > 1_000L) {
-            announceCurrent("카메라를 준비하고 있습니다. 잠시만 기다려주세요.")
-            delay(cameraSettleMs)
         }
         announceCurrent(
             if (isManualRequest) {
@@ -835,7 +893,11 @@ class CookingSessionViewModel(
                 )
             )
         }
-        val outcome = cameraGateway.capture(request)
+        val outcome = if (isManualRequest) {
+            captureRequiredWithRetry(request, "요청한 확인 촬영")
+        } else {
+            cameraGateway.capture(request)
+        }
         handleCaptureOutcome(request, outcome)
     }
 
@@ -859,6 +921,18 @@ class CookingSessionViewModel(
                         )
                     )
                 }
+                if (request.purpose == CapturePurpose.MANUAL_CHECK) {
+                    val attempts = if (outcome.retryable) {
+                        "최대 ${REQUIRED_CAPTURE_MAX_ATTEMPTS}회 재시도했지만"
+                    } else {
+                        "시도했지만"
+                    }
+                    transitionToManualMode(
+                        "요청한 확인 촬영을 $attempts 완료하지 못했습니다. " +
+                            "${outcome.userMessage} 안경 연결을 확인해주세요."
+                    )
+                    return
+                }
                 when (outcome.kind) {
                     CaptureFailureKind.NOT_REGISTERED,
                     CaptureFailureKind.PERMISSION_DENIED,
@@ -874,7 +948,7 @@ class CookingSessionViewModel(
                             transitionToManualMode("카메라 스트림 준비가 두 번 연속 실패해 수동 모드로 전환합니다.")
                         } else {
                             val step = uiState.value.currentStep ?: return
-                            scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
                         }
                     }
                     CaptureFailureKind.BUSY,
@@ -883,7 +957,7 @@ class CookingSessionViewModel(
                     CaptureFailureKind.NOT_READY,
                     CaptureFailureKind.UNKNOWN -> {
                         val step = uiState.value.currentStep ?: return
-                        scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                        scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
                     }
                     CaptureFailureKind.INVALID_REQUEST,
                     CaptureFailureKind.CANCELLED -> Unit
@@ -960,7 +1034,7 @@ class CookingSessionViewModel(
             CaptureFailureKind.NOT_READY,
             CaptureFailureKind.UNKNOWN -> {
                 val step = uiState.value.currentStep ?: return
-                scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             }
             CaptureFailureKind.INVALID_REQUEST,
             CaptureFailureKind.CANCELLED -> Unit
@@ -1001,7 +1075,7 @@ class CookingSessionViewModel(
                     )
                 }
                 val step = uiState.value.currentStep ?: return
-                if (outcome.retryable) scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                if (outcome.retryable) scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             }
 
             is JudgmentOutcome.Success -> {
@@ -1038,7 +1112,7 @@ class CookingSessionViewModel(
                         )
                     }
                     announceCurrent("완료 상태를 한 번 더 확인할게요.")
-                    scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                    scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
                     return
                 }
                 val completedAt = System.currentTimeMillis()
@@ -1093,7 +1167,7 @@ class CookingSessionViewModel(
                         )
                     )
                 }
-                scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             }
 
             JudgmentVerdict.CANNOT_TELL -> {
@@ -1122,7 +1196,7 @@ class CookingSessionViewModel(
                     announceCurrent("자동 확인을 멈췄어요. 다 되면 다음이라고 말해주세요.")
                 } else {
                     announceCurrent("팬이 잘 안 보여요. 팬 쪽을 한 번 봐주세요.")
-                    scheduleInspection(step.inspectionPolicy?.checkIntervalSeconds ?: 10)
+                    scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
                 }
             }
         }

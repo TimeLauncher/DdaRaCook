@@ -61,4 +61,15 @@ class AppPersistenceInstrumentedTest {
         assertEquals(1_000L, restored?.logs?.single()?.requestedAtMs)
         assertEquals(JudgmentVerdict.NOT_DONE, restored?.logs?.single()?.groundTruth)
     }
+
+    @Test
+    fun judgmentModeDefaultsToRealServerAndPersistsExplicitChoice() {
+        assertEquals(false, persistence.loadUseMockJudgment())
+
+        persistence.saveUseMockJudgment(true)
+        assertEquals(true, persistence.loadUseMockJudgment())
+
+        persistence.saveUseMockJudgment(false)
+        assertEquals(false, persistence.loadUseMockJudgment())
+    }
 }

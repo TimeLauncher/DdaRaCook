@@ -41,7 +41,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,10 +64,6 @@ class DatWearableCameraGateway(
         private const val TAG = "DatCameraGateway"
         private const val FRAME_RATE = 24
         private const val CLEANUP_TIMEOUT_MS = 5_000L
-        // Repeated real-device captures were stable at 20-second intervals. In the failure trace,
-        // reopening the camera after three seconds preceded a stream timeout while the glasses
-        // reported thermal throttling, so keep the verified interval as a device safety margin.
-        private const val CAMERA_RELEASE_SETTLE_MS = 20_000L
     }
 
     private val gatewayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -89,16 +84,6 @@ class DatWearableCameraGateway(
     private var selectorJob: Job? = null
     private var sessionStateJob: Job? = null
     private var sessionErrorJob: Job? = null
-    @Volatile
-    private var lastCameraReleasedAtElapsedMs = 0L
-
-    fun remainingCameraSettleMs(): Long {
-        val releasedAt = lastCameraReleasedAtElapsedMs
-        if (releasedAt <= 0L) return 0L
-        val elapsedSinceRelease = SystemClock.elapsedRealtime() - releasedAt
-        return (CAMERA_RELEASE_SETTLE_MS - elapsedSinceRelease).coerceAtLeast(0L)
-    }
-
     fun initialize() {
         if (!initialized.compareAndSet(false, true)) return
         Wearables.initialize(application)
@@ -287,23 +272,6 @@ class DatWearableCameraGateway(
                 request,
                 CaptureFailureKind.NOT_READY,
                 "Device session is not STARTED"
-            )
-        }
-
-        val settleDelay = remainingCameraSettleMs()
-        if (settleDelay > 0L) {
-            Log.i(
-                TAG,
-                "requestId=${request.requestId} purpose=${request.purpose} " +
-                    "waitingForCameraSettleMs=$settleDelay"
-            )
-            delay(settleDelay)
-        }
-        if (currentSession.state.value != DeviceSessionState.STARTED) {
-            return@coroutineScope failure(
-                request,
-                CaptureFailureKind.NOT_READY,
-                "Device session stopped while waiting for camera cooldown"
             )
         }
 
@@ -600,7 +568,6 @@ class DatWearableCameraGateway(
         if (!removedFromSession) camera?.close()
         jobs.forEach { it.cancelAndJoin() }
         DatStreamingService.stop(application)
-        lastCameraReleasedAtElapsedMs = SystemClock.elapsedRealtime()
         cleanupFailure
     }
 

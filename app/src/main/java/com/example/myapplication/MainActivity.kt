@@ -93,6 +93,7 @@ import com.example.myapplication.camera.CaptureOutcome
 import com.example.myapplication.camera.WearableCameraState
 import com.example.myapplication.camera.DatCameraPermissionContract
 import com.example.myapplication.camera.datAndroidPermissions
+import com.example.myapplication.judgment.ImageNormalizer
 import com.example.myapplication.ui.theme.Ash
 import com.example.myapplication.ui.theme.AshDark
 import com.example.myapplication.ui.theme.Flame
@@ -473,8 +474,8 @@ private fun RecipeEditorScreen(
     var instruction by remember(existing?.id) { mutableStateOf("") }
     var checkType by remember(existing?.id) { mutableStateOf(CheckType.PRESENCE) }
     var condition by remember(existing?.id) { mutableStateOf("") }
-    var earliest by remember(existing?.id) { mutableStateOf("10") }
-    var interval by remember(existing?.id) { mutableStateOf("10") }
+    var earliest by remember(existing?.id) { mutableStateOf(AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()) }
+    var interval by remember(existing?.id) { mutableStateOf(AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()) }
     var consecutive by remember(existing?.id) { mutableStateOf("1") }
     var maximum by remember(existing?.id) { mutableStateOf("120") }
     var editingIndex by remember(existing?.id) { mutableStateOf<Int?>(null) }
@@ -486,8 +487,8 @@ private fun RecipeEditorScreen(
         instruction = ""
         condition = ""
         checkType = CheckType.PRESENCE
-        earliest = "10"
-        interval = "10"
+        earliest = AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()
+        interval = AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()
         consecutive = "1"
         maximum = "120"
         editingIndex = null
@@ -795,11 +796,13 @@ private fun CookingScreen(
                 }
             }
             Spacer(modifier = Modifier.height(14.dp))
-            ControlRow("Fake Verdict") {
+            ControlRow("판정 방식") {
                 SmallGhostButton(if (uiState.useMockJudgment) "✓ Fake 판정" else "Fake 판정") { onSetMockEnabled(true) }
                 SmallGhostButton(if (!uiState.useMockJudgment) "✓ 실제 서버" else "실제 서버") { onSetMockEnabled(false) }
-                JudgmentVerdict.entries.forEach { verdict ->
-                    SmallGhostButton(verdict.name, { onMockVerdict(verdict) })
+                if (uiState.useMockJudgment) {
+                    JudgmentVerdict.entries.forEach { verdict ->
+                        SmallGhostButton(verdict.name, { onMockVerdict(verdict) })
+                    }
                 }
             }
             if (!uiState.useMockJudgment) {
@@ -828,7 +831,11 @@ private fun CookingScreen(
             PrimaryButton(label = "검사 시작", onClick = onStartInspection)
             Spacer(modifier = Modifier.height(14.dp))
             (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.let {
-                CapturedPhotoCard(it.artifact, isFakeCamera = uiState.useFakeCamera)
+                CapturedPhotoCard(
+                    it.artifact,
+                    isFakeCamera = uiState.useFakeCamera,
+                    usesMockJudgment = uiState.useMockJudgment
+                )
                 Spacer(modifier = Modifier.height(14.dp))
             }
             if (uiState.currentCaptureOutcome != null || uiState.judgeError != null) {
@@ -887,7 +894,12 @@ private fun StepDoneScreen(
             )
             (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.let {
                 Spacer(modifier = Modifier.height(14.dp))
-                CapturedPhotoCard(it.artifact, isFakeCamera = uiState.useFakeCamera, compact = true)
+                CapturedPhotoCard(
+                    it.artifact,
+                    isFakeCamera = uiState.useFakeCamera,
+                    usesMockJudgment = uiState.useMockJudgment,
+                    compact = true
+                )
             }
             Spacer(modifier = Modifier.height(18.dp))
             PrimaryButton(label = "다음 단계", onClick = onContinue)
@@ -1196,10 +1208,22 @@ private data class CaptureImageLoad(
     val complete: Boolean = false
 )
 
+private data class ServerImagePreviewLoad(
+    val image: ImageBitmap? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val byteSize: Int? = null,
+    val pipelineVersion: String? = null,
+    val sha256: String? = null,
+    val complete: Boolean = false,
+    val errorMessage: String? = null
+)
+
 @Composable
 private fun CapturedPhotoCard(
     artifact: CaptureArtifact,
     isFakeCamera: Boolean,
+    usesMockJudgment: Boolean,
     compact: Boolean = false
 ) {
     val context = LocalContext.current
@@ -1215,6 +1239,37 @@ private fun CapturedPhotoCard(
             }.getOrNull()
         }
         value = CaptureImageLoad(image = image, complete = true)
+    }
+    val serverPreview by produceState(
+        initialValue = ServerImagePreviewLoad(),
+        key1 = artifact.imageUri
+    ) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val normalized = ImageNormalizer(context).normalize(artifact.imageUri)
+                val bitmap = requireNotNull(
+                    BitmapFactory.decodeByteArray(
+                        normalized.jpegBytes,
+                        0,
+                        normalized.jpegBytes.size
+                    )
+                ) { "서버 전송 이미지를 디코딩할 수 없습니다." }
+                ServerImagePreviewLoad(
+                    image = bitmap.asImageBitmap(),
+                    width = normalized.width,
+                    height = normalized.height,
+                    byteSize = normalized.jpegBytes.size,
+                    pipelineVersion = normalized.pipelineVersion,
+                    sha256 = normalized.sha256,
+                    complete = true
+                )
+            }.getOrElse { error ->
+                ServerImagePreviewLoad(
+                    complete = true,
+                    errorMessage = error.message ?: "서버 전송 이미지를 만들 수 없습니다."
+                )
+            }
+        }
     }
 
     InfoCard(title = "최근 촬영 사진") {
@@ -1249,6 +1304,52 @@ private fun CapturedPhotoCard(
             color = Ash,
             fontSize = 11.sp
         )
+        Spacer(modifier = Modifier.height(14.dp))
+        HorizontalDivider(color = Rim)
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+            if (usesMockJudgment) {
+                "서버 전송 예정본 · 현재 Fake 판정이라 미전송"
+            } else {
+                "실제 서버 전송 형식 · 상단 40% 제거"
+            },
+            color = if (usesMockJudgment) Color(0xFFE5C04A) else Herb,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        when {
+            serverPreview.image != null -> Image(
+                bitmap = checkNotNull(serverPreview.image),
+                contentDescription = "판정 서버에 전송되는 이미지",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (compact) 130.dp else 200.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(PanDark),
+                contentScale = ContentScale.Fit
+            )
+            serverPreview.complete -> Text(
+                serverPreview.errorMessage ?: "서버 전송 이미지를 표시할 수 없습니다.",
+                color = Color(0xFFE5C04A),
+                fontSize = 12.sp
+            )
+            else -> Text("서버 전송 이미지를 만드는 중...", color = Ash, fontSize = 12.sp)
+        }
+        if (serverPreview.image != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "${serverPreview.width ?: "-"}×${serverPreview.height ?: "-"} · JPEG 80 · " +
+                    formatFileSize(serverPreview.byteSize?.toLong() ?: 0L),
+                color = Ash,
+                fontSize = 11.sp
+            )
+            Text(
+                "${serverPreview.pipelineVersion} · SHA-256 ${serverPreview.sha256?.take(12)}…",
+                color = Ash,
+                fontSize = 10.sp
+            )
+        }
     }
 }
 

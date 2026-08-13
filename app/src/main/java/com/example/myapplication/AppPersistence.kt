@@ -33,6 +33,17 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         preferences.edit().putString(KEY_SERVER_BASE_URL, value).apply()
     }
 
+    fun loadUseMockJudgment(fallback: Boolean = false): Boolean =
+        if (preferences.contains(KEY_USE_MOCK_JUDGMENT)) {
+            preferences.getBoolean(KEY_USE_MOCK_JUDGMENT, fallback)
+        } else {
+            fallback
+        }
+
+    fun saveUseMockJudgment(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_USE_MOCK_JUDGMENT, enabled).apply()
+    }
+
     internal fun clear() {
         preferences.edit().clear().commit()
     }
@@ -41,6 +52,7 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_RECIPES = "recipes"
         const val KEY_SESSION = "active_session"
         const val KEY_SERVER_BASE_URL = "server_base_url"
+        const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
     }
 }
 

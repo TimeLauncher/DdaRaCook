@@ -11,6 +11,28 @@ import org.junit.Test
 
 class CookingDomainTest {
     @Test
+    fun persistedRecipesAreMigratedToThirtySecondAutomaticInspection() {
+        val migrated = RecipeFixtures.sampleRecipes().map { recipe ->
+            recipe.copy(steps = recipe.steps.map { step ->
+                step.copy(
+                    inspectionPolicy = step.inspectionPolicy?.copy(
+                        earliestCheckSeconds = 8,
+                        checkIntervalSeconds = 10
+                    )
+                )
+            })
+        }.withAutomaticInspectionInterval()
+
+        val policies = migrated.flatMap(Recipe::steps)
+            .filter(RecipeStep::isAutoCheck)
+            .mapNotNull(RecipeStep::inspectionPolicy)
+        assertTrue(policies.isNotEmpty())
+        assertTrue(policies.all { it.earliestCheckSeconds == 30 })
+        assertTrue(policies.all { it.checkIntervalSeconds == 30 })
+    }
+
+
+    @Test
     fun recipeValidationRejectsMissingAutomaticPolicy() {
         val recipe = Recipe(
             id = "custom",
