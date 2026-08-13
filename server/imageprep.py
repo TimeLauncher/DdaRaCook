@@ -83,18 +83,37 @@ def resize_long_edge(im: Image.Image, long_edge: int) -> Image.Image:
     return im
 
 
+def drop_top(im: Image.Image, percent: int) -> Image.Image:
+    """위쪽 일정 비율을 버린다 (제품 정규화 1단계, 2026-08-13 3인 협의).
+
+    1인칭 안경 화각에서 상단은 벽·후드·걸어둔 조리도구뿐입니다.
+    `testdata/raw` 16장 실측에서 판정 대상은 **전부** 세로 60% 아래에 있었고,
+    크롭 후에도 잘린 장이 없었습니다.
+
+    페이로드보다 중요한 효과는 **판정 잡음 제거**입니다. 도마 사진 상단의
+    칼·주전자·밀폐용기가 IDENTIFY 판정을 방해하지 않게 됩니다.
+    """
+    if not 0 < percent < 100:
+        return im
+    w, h = im.size
+    return im.crop((0, h * percent // 100, w, h))
+
+
 def prepare(
     path: str,
     long_edge: Optional[int] = None,
     srgb: bool = False,
     quality: int = 80,
+    crop_top: Optional[int] = None,
 ) -> bytes:
     """평가·전송용 JPEG bytes 를 만든다.
 
-    long_edge / srgb 를 둘 다 주지 않으면 **파일을 그대로 읽어 돌려준다**
+    아무 변환도 주지 않으면 **파일을 그대로 읽어 돌려준다**
     (위 모듈 docstring 의 규칙).
+
+    제품과 동일한 전처리는 `crop_top=40, long_edge=1024` 입니다.
     """
-    if long_edge is None and not srgb:
+    if long_edge is None and crop_top is None and not srgb:
         with open(path, "rb") as f:
             return f.read()
 
@@ -107,6 +126,11 @@ def prepare(
         icc = None          # 변환했으므로 원본 프로파일은 더 이상 유효하지 않다
     elif im.mode != "RGB":
         im = im.convert("RGB")
+
+    # 앱 파이프라인과 같은 순서. 크롭이 먼저여야 긴 변 기준이 달라진다
+    # (3024x4032 → 크롭 → 3024x2419 → 긴 변이 가로로 바뀜 → 1024x819).
+    if crop_top is not None:
+        im = drop_top(im, crop_top)
 
     if long_edge is not None:
         im = resize_long_edge(im, long_edge)

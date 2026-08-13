@@ -21,7 +21,7 @@
 |---|---|---|
 | 촬영 **1↔2** | `camera/CameraContracts.kt` | Meta DAT 타입은 `camera/` 밖으로 나가지 않음. 모든 실패는 `CaptureOutcome.Failure`로만 전달 |
 | 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 코드가 계약을 따름. 변경은 3명 합의 → 버전 올림 → 코드 수정 순서 |
-| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 · [`server/이미지규격_요청서.md`](server/이미지규격_요청서.md) | JPEG q80 · 긴 변 1280px · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만 |
+| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 · [`server/이미지규격_요청서.md`](server/이미지규격_요청서.md) | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만 |
 
 ## 규칙
 

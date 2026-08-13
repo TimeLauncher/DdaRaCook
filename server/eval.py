@@ -6,6 +6,7 @@ T2-2 · 평가 스크립트
     python eval.py                             # 실제 평가
     python eval.py --mode both                 # 🔬 T2-4 · 1장 vs 2장 비교
     python eval.py --srgb                      # 🎨 P3→sRGB 변환 후 평가
+    python eval.py --crop-top 40 --long-edge 1024   # 제품과 동일한 전처리
 
 명세서 12절의 목표는 **"정확도 80%" 하나가 아니라 둘**입니다.
 
@@ -211,11 +212,12 @@ class Outcome:
 
 
 def run(labels: list[Label], judge, mode: str, srgb: bool,
-        long_edge: Optional[int], verbose: bool) -> list[Outcome]:
+        long_edge: Optional[int], verbose: bool,
+        crop_top: Optional[int] = None) -> list[Outcome]:
     """라벨 전체를 한 번 돌린다. mode 는 '1' 또는 '2'."""
     getattr(judge, "reset", lambda: None)()   # mock 의 순환 위치를 매 실행 초기화
 
-    prep = dict(srgb=srgb, long_edge=long_edge)
+    prep = dict(srgb=srgb, long_edge=long_edge, crop_top=crop_top)
     out: list[Outcome] = []
 
     for i, lb in enumerate(labels, 1):
@@ -445,7 +447,7 @@ def compare(a: list[Outcome], b: list[Outcome]) -> None:
 # 6. CSV — 버전별 추이 비교용 (계획서 379줄)
 # ══════════════════════════════════════════════════════════
 CSV_COLUMNS = ["ts", "backend", "model", "promptVersion", "mode", "srgb",
-               "longEdge", "n", "accuracy", "aGradeN", "aGradeAccuracy",
+               "cropTop", "longEdge", "n", "accuracy", "aGradeN", "aGradeAccuracy",
                "falseAccept", "falseReject", "cannotTellRate", "unparsed",
                "errors", "latMedian", "latMax", "note"]
 
@@ -460,7 +462,8 @@ def append_csv(path: str, m: Metrics, a: Metrics, args, judge, mode: str) -> Non
             "ts": datetime.now().isoformat(timespec="seconds"),
             "backend": judge.name, "model": judge.model,
             "promptVersion": prompts.PROMPT_VERSION,
-            "mode": mode, "srgb": int(args.srgb), "longEdge": args.long_edge or "",
+            "mode": mode, "srgb": int(args.srgb),
+            "cropTop": args.crop_top or "", "longEdge": args.long_edge or "",
             "n": m.n, "accuracy": round(m.accuracy, 4),
             "aGradeN": a.n, "aGradeAccuracy": round(a.accuracy, 4),
             "falseAccept": m.false_accept, "falseReject": m.false_reject,
@@ -600,6 +603,9 @@ def main() -> int:
                    help="모델에 보낼 이미지 수. both = T2-4 비교 실험")
     p.add_argument("--srgb", action="store_true",
                    help="🎨 Display P3 → sRGB 변환 후 평가 (T2-3 A/B)")
+    p.add_argument("--crop-top", type=int, default=None, metavar="PCT",
+                   help="위쪽 PCT%% 를 버린 뒤 평가 (제품 규격: --crop-top 40). "
+                        "--long-edge 보다 먼저 적용됩니다")
     p.add_argument("--long-edge", type=int, default=None,
                    help="긴 변 축소 후 평가. 생략하면 파일을 그대로 보냅니다")
     p.add_argument("--include-ambiguous", action="store_true",
@@ -640,7 +646,9 @@ def main() -> int:
     print(f"  backend : {judge.name} · {judge.model}")
     print(f"  prompt  : {prompts.PROMPT_VERSION}")
     print(f"  이미지   : mode={args.mode}"
-          + (f" · 긴변 {args.long_edge}" if args.long_edge else " · 원본 그대로")
+          + (f" · 위 {args.crop_top}% 제거" if args.crop_top else "")
+          + (f" · 긴변 {args.long_edge}" if args.long_edge
+             else ("" if args.crop_top else " · 원본 그대로"))
           + (" · sRGB 변환" if args.srgb else " · 색공간 변환 없음(P3)"))
     print("=" * 66)
 
@@ -648,7 +656,8 @@ def main() -> int:
         print("❌ 집계할 쌍이 없습니다 (전부 ambiguous). --include-ambiguous 를 쓰세요")
         return 1
 
-    prep = dict(srgb=args.srgb, long_edge=args.long_edge, verbose=not args.quiet)
+    prep = dict(srgb=args.srgb, long_edge=args.long_edge,
+                crop_top=args.crop_top, verbose=not args.quiet)
 
     if args.mode == "both":
         two = run(usable, judge, "2", **prep)
