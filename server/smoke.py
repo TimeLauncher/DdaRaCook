@@ -36,10 +36,13 @@ load_dotenv()
 DEFAULT_START = "probe_images/start.jpg"
 DEFAULT_CURRENT = "probe_images/current.jpg"
 
-# 합성 이미지(흰 원 → 호박색 원)에 맞춘 기본 시나리오.
-# 실제 요리 사진으로 바꿔 돌릴 때는 --instruction/--condition 을 함께 바꾸세요.
-DEFAULT_INSTRUCTION = "양파를 투명해질 때까지 볶으세요"
-DEFAULT_CONDITION = "팬 안의 재료가 흰색/불투명에서 반투명하거나 노릇하게 변했는가"
+# 대표 레시피 3단계의 정본 문장 (기능명세서 §5.1.1).
+# ⚠️ 기본 이미지는 합성(흰 원 → 호박색 원)이라 이 조건을 만족하지 않는다.
+#    smoke 는 **왕복과 지연**을 재는 도구이지 정확도를 재는 도구가 아니므로
+#    verdict 가 NOT_DONE 으로 나오는 것이 정상이다. 정확도는 eval.py 로 잰다.
+#    실제 사진으로 돌릴 때는 --start/--current 만 바꾸면 된다.
+DEFAULT_INSTRUCTION = "기름을 두르고 야채를 중약불로 볶으세요"
+DEFAULT_CONDITION = "팬 안의 양파가 흰색/불투명에서 반투명하게 변했는가"
 
 
 def b64_of(path: str) -> str:
@@ -120,7 +123,7 @@ def run_http(args) -> int:
 
     payload = {
         "requestId": "smoke-0",
-        "recipeId": "kimchi-fried-rice",
+        "recipeId": "soya",
         "stepOrder": 3,
         "instruction": args.instruction,
         "checkType": args.type,
