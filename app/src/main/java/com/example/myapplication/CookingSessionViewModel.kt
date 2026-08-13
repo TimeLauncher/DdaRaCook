@@ -47,6 +47,7 @@ class CookingSessionViewModel(
     private val fixtureRecipes = RecipeFixtures.sampleRecipes().filter { it.id == "kimchi" } +
         RecipeFixtures.sampleRecipes().filter { it.id != "kimchi" }
     private val initialRecipes = persistence.loadRecipes(fixtureRecipes)
+    private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
     private val restoredSession = persistence.loadSession()?.takeIf { saved ->
         initialRecipes.any { it.id == saved.recipeId } && saved.phase != CookingPhase.SESSION_COMPLETED
     }
@@ -62,10 +63,15 @@ class CookingSessionViewModel(
                 "가짜 안경 게이트웨이를 사용 중입니다."
             } else {
                 "실제 Meta 안경 연결을 준비합니다."
-            }
+            },
+            serverBaseUrl = initialServerBaseUrl
         )
     )
     val uiState: StateFlow<CookingSessionUiState> = mutableUiState.asStateFlow()
+
+    init {
+        networkJudgmentGateway.updateBaseUrl(initialServerBaseUrl)
+    }
 
     private var announcementId = 0L
     private var inspectionCountdownJob: Job? = null
@@ -98,7 +104,7 @@ class CookingSessionViewModel(
         }
         viewModelScope.launch {
             uiState.collect { state ->
-                persistence.saveSession(state.session?.takeUnless { it.phase == CookingPhase.SESSION_COMPLETED })
+                persistence.saveSession(state.session)
             }
         }
     }
@@ -152,10 +158,20 @@ class CookingSessionViewModel(
                 state.copy(
                     session = currentSession.copy(
                         lastCaptureUriByStep = emptyMap(),
-                        baselineUriByStep = emptyMap()
+                        baselineUriByStep = emptyMap(),
+                        logs = currentSession.logs.map { it.copy(imageUri = null) }
                     )
                 )
             }
+        }
+    }
+
+    fun recordGroundTruth(requestId: String, verdict: JudgmentVerdict) {
+        mutableUiState.update { state ->
+            val session = state.session ?: return@update state
+            state.copy(session = session.copy(logs = session.logs.map { log ->
+                if (log.requestId == requestId && log.verdict != null) log.copy(groundTruth = verdict) else log
+            }))
         }
     }
 
@@ -473,6 +489,19 @@ class CookingSessionViewModel(
             return
         }
         val currentIndex = session.currentStepIndex
+        if (!uiState.value.useMockJudgment) {
+            viewModelScope.launch {
+                mutableUiState.update { it.copy(serverReady = null, serverStatusMessage = "판정 서버 상태 확인 중") }
+                val health = networkJudgmentGateway.checkHealth()
+                mutableUiState.update { it.copy(serverReady = health.ready, serverStatusMessage = health.message) }
+                if (health.ready) resumeAutoModeAfterCheck(session, currentIndex)
+            }
+            return
+        }
+        resumeAutoModeAfterCheck(session, currentIndex)
+    }
+
+    private fun resumeAutoModeAfterCheck(session: CookingSession, currentIndex: Int) {
         mutableUiState.update {
             it.copy(
                 currentScreen = AppScreen.S5_COOKING,
@@ -498,17 +527,21 @@ class CookingSessionViewModel(
     fun handleVoiceTranscript(text: String) {
         setListening(false)
         mutableUiState.update { it.copy(speechError = null, lastVoiceTranscript = text.trim()) }
-        val normalized = text.trim().lowercase()
         val screen = uiState.value.currentScreen
-        when {
-            "재료" in normalized -> announceIngredients()
-            "자동 확인 다시" in normalized || "자동확인 다시" in normalized -> if (screen == AppScreen.S8_MANUAL) resumeAutoMode()
-            "다음" in normalized -> if (screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S7_NEEDS_VIEW, AppScreen.S8_MANUAL)) continueToNextStep()
-            "아직" in normalized -> if (screen == AppScreen.S5_COOKING) keepCurrentStepAndReschedule()
-            "다시" in normalized -> if (screen in setOf(AppScreen.S5_COOKING, AppScreen.S8_MANUAL)) repeatCurrentStep()
-            "이전" in normalized -> if (screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S8_MANUAL)) moveToPreviousStep()
-            "확인" in normalized -> if (screen in setOf(AppScreen.S5_COOKING, AppScreen.S7_NEEDS_VIEW)) triggerImmediateInspection()
-            else -> onSpeechError("사용할 수 있는 음성 명령을 인식하지 못했습니다.")
+        val command = parseVoiceCommand(text)
+        if (command == null || !isVoiceCommandAllowed(command, screen)) {
+            onSpeechError("현재 화면에서 사용할 수 있는 음성 명령이 아닙니다.")
+            return
+        }
+        when (command) {
+            VoiceCommand.INGREDIENTS -> announceIngredients()
+            VoiceCommand.VERIFY_INGREDIENT, VoiceCommand.CHECK_NOW -> triggerImmediateInspection()
+            VoiceCommand.CURRENT_STEP -> announceCurrentStep()
+            VoiceCommand.RESUME_AUTO -> resumeAutoMode()
+            VoiceCommand.NEXT -> continueToNextStep()
+            VoiceCommand.NOT_YET -> keepCurrentStepAndReschedule()
+            VoiceCommand.REPEAT -> repeatCurrentStep()
+            VoiceCommand.PREVIOUS -> moveToPreviousStep()
         }
     }
 
@@ -518,8 +551,43 @@ class CookingSessionViewModel(
         announceCurrent(limitAnnouncement("재료는 $message 입니다."))
     }
 
+    private fun announceCurrentStep() {
+        val step = uiState.value.currentStep ?: return
+        val total = uiState.value.selectedRecipe?.steps?.size ?: return
+        announceCurrent("현재 ${step.order}단계, 전체 ${total}단계입니다. ${step.instruction}")
+    }
+
     fun setMockJudgmentEnabled(enabled: Boolean) {
-        mutableUiState.update { it.copy(useMockJudgment = enabled) }
+        mutableUiState.update {
+            it.copy(
+                useMockJudgment = enabled,
+                serverReady = if (enabled) null else it.serverReady,
+                serverStatusMessage = if (enabled) null else "실제 서버를 사용하기 전에 연결 상태를 확인합니다."
+            )
+        }
+        if (!enabled) checkServerHealth()
+    }
+
+    fun checkServerHealth() {
+        viewModelScope.launch {
+            mutableUiState.update { it.copy(serverReady = null, serverStatusMessage = "판정 서버 상태 확인 중") }
+            val health = networkJudgmentGateway.checkHealth()
+            mutableUiState.update { it.copy(serverReady = health.ready, serverStatusMessage = health.message) }
+        }
+    }
+
+    fun setServerBaseUrl(value: String) {
+        mutableUiState.update { it.copy(serverBaseUrl = value, serverReady = null, serverStatusMessage = null) }
+    }
+
+    fun applyServerBaseUrl() {
+        val value = uiState.value.serverBaseUrl
+        if (!networkJudgmentGateway.updateBaseUrl(value)) {
+            mutableUiState.update { it.copy(serverReady = false, serverStatusMessage = "http 또는 https 서버 주소를 입력해 주세요.") }
+            return
+        }
+        persistence.saveServerBaseUrl(value.trim().trimEnd('/'))
+        checkServerHealth()
     }
 
     fun setMockVerdict(verdict: JudgmentVerdict) {
@@ -924,7 +992,10 @@ class CookingSessionViewModel(
                                 stepOrder = currentStepOrder(session),
                                 message = "판정 실패: ${outcome.message}",
                                 requestId = outcome.requestId,
-                                eventType = "NETWORK_FAILURE"
+                                eventType = "NETWORK_FAILURE",
+                                requestedAtMs = outcome.requestedAtMs,
+                                respondedAtMs = outcome.respondedAtMs,
+                                imageUri = session.lastCaptureUriByStep[currentStepOrder(session)]
                             )
                         )
                     )
@@ -1027,8 +1098,7 @@ class CookingSessionViewModel(
 
             JudgmentVerdict.CANNOT_TELL -> {
                 val streak = session.cannotTellStreak + 1
-                val nextPhase = if (streak >= 3) CookingPhase.MANUAL_MODE else CookingPhase.NEEDS_VIEW
-                val nextScreen = if (streak >= 3) AppScreen.S8_MANUAL else AppScreen.S7_NEEDS_VIEW
+                val (nextPhase, nextScreen) = cannotTellDestination(streak)
                 mutableUiState.update {
                     it.copy(
                         currentScreen = nextScreen,
@@ -1120,7 +1190,10 @@ class CookingSessionViewModel(
         vlmLatencyMs = result.vlmLatencyMs,
         reasonCode = result.reasonCode,
         requestId = result.requestId,
-        eventType = "JUDGMENT"
+        eventType = "JUDGMENT",
+        requestedAtMs = result.requestedAtMs,
+        respondedAtMs = result.respondedAtMs,
+        imageUri = uiState.value.session?.lastCaptureUriByStep?.get(stepOrder)
     )
 
     private fun createFreshSession(
@@ -1177,3 +1250,33 @@ private fun cameraStateHint(state: WearableCameraState, isFake: Boolean): String
         WearableCameraState.Released -> "카메라 세션이 종료되었습니다."
     }
 }
+
+internal fun parseVoiceCommand(text: String): VoiceCommand? {
+    val normalized = text.trim().lowercase()
+    return when {
+        "재료" in normalized -> VoiceCommand.INGREDIENTS
+        "이거 맞아" in normalized || "이게 맞아" in normalized -> VoiceCommand.VERIFY_INGREDIENT
+        "몇 단계" in normalized || "몇단계" in normalized -> VoiceCommand.CURRENT_STEP
+        "자동 확인 다시" in normalized || "자동확인 다시" in normalized -> VoiceCommand.RESUME_AUTO
+        "다음" in normalized -> VoiceCommand.NEXT
+        "아직" in normalized -> VoiceCommand.NOT_YET
+        "다시" in normalized -> VoiceCommand.REPEAT
+        "이전" in normalized -> VoiceCommand.PREVIOUS
+        "확인" in normalized -> VoiceCommand.CHECK_NOW
+        else -> null
+    }
+}
+
+internal fun isVoiceCommandAllowed(command: VoiceCommand, screen: AppScreen): Boolean = when (command) {
+    VoiceCommand.INGREDIENTS, VoiceCommand.CURRENT_STEP -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S7_NEEDS_VIEW, AppScreen.S8_MANUAL)
+    VoiceCommand.VERIFY_INGREDIENT, VoiceCommand.CHECK_NOW -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S7_NEEDS_VIEW)
+    VoiceCommand.RESUME_AUTO -> screen == AppScreen.S8_MANUAL
+    VoiceCommand.NEXT -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S7_NEEDS_VIEW, AppScreen.S8_MANUAL)
+    VoiceCommand.NOT_YET -> screen == AppScreen.S5_COOKING
+    VoiceCommand.REPEAT -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S8_MANUAL)
+    VoiceCommand.PREVIOUS -> screen in setOf(AppScreen.S5_COOKING, AppScreen.S6_STEP_DONE, AppScreen.S8_MANUAL)
+}
+
+internal fun cannotTellDestination(streak: Int): Pair<CookingPhase, AppScreen> =
+    if (streak >= 3) CookingPhase.MANUAL_MODE to AppScreen.S8_MANUAL
+    else CookingPhase.NEEDS_VIEW to AppScreen.S7_NEEDS_VIEW

@@ -26,6 +26,13 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         editor.apply()
     }
 
+    fun loadServerBaseUrl(fallback: String): String =
+        preferences.getString(KEY_SERVER_BASE_URL, null)?.takeIf(String::isNotBlank) ?: fallback
+
+    fun saveServerBaseUrl(value: String) {
+        preferences.edit().putString(KEY_SERVER_BASE_URL, value).apply()
+    }
+
     internal fun clear() {
         preferences.edit().clear().commit()
     }
@@ -33,6 +40,7 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
     private companion object {
         const val KEY_RECIPES = "recipes"
         const val KEY_SESSION = "active_session"
+        const val KEY_SERVER_BASE_URL = "server_base_url"
     }
 }
 
@@ -203,6 +211,10 @@ private fun SessionLogEntry.toJson() = JSONObject().apply {
     put("eventType", eventType)
     put("manualOverride", manualOverride)
     put("overrideType", overrideType)
+    put("requestedAtMs", requestedAtMs)
+    put("respondedAtMs", respondedAtMs)
+    put("imageUri", imageUri)
+    put("groundTruth", groundTruth?.name)
 }
 
 private fun JSONArray?.toLogs(): List<SessionLogEntry> = if (this == null) emptyList() else buildList {
@@ -219,7 +231,11 @@ private fun JSONArray?.toLogs(): List<SessionLogEntry> = if (this == null) empty
             requestId = json.optString("requestId").takeIf(String::isNotBlank),
             eventType = json.optString("eventType", "INFO"),
             manualOverride = json.optBoolean("manualOverride"),
-            overrideType = json.optString("overrideType").takeIf(String::isNotBlank)
+            overrideType = json.optString("overrideType").takeIf(String::isNotBlank),
+            requestedAtMs = json.optNullableLong("requestedAtMs"),
+            respondedAtMs = json.optNullableLong("respondedAtMs"),
+            imageUri = json.optString("imageUri").takeIf(String::isNotBlank),
+            groundTruth = json.optString("groundTruth").enumOrNull<JudgmentVerdict>()
         ))
     }
 }

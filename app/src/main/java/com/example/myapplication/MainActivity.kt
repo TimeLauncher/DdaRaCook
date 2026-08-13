@@ -18,8 +18,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -46,6 +46,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
@@ -72,6 +73,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
@@ -307,6 +313,8 @@ private fun TtaraCookApp(
                     onUseFailureCapture = sessionViewModel::setFakeCaptureBehaviorFailure,
                     onMockVerdict = sessionViewModel::setMockVerdict,
                     onSetMockEnabled = sessionViewModel::setMockJudgmentEnabled,
+                    onServerBaseUrlChange = sessionViewModel::setServerBaseUrl,
+                    onApplyServerBaseUrl = sessionViewModel::applyServerBaseUrl,
                     onVoice = {
                         if (uiState.audioPermissionGranted) {
                             speechController.startListening()
@@ -348,7 +356,8 @@ private fun TtaraCookApp(
                 AppScreen.S9_SUMMARY -> SummaryScreen(
                     uiState = uiState,
                     onDone = sessionViewModel::backToHome,
-                    onDeleteImages = sessionViewModel::deleteSessionImages
+                    onDeleteImages = sessionViewModel::deleteSessionImages,
+                    onGroundTruth = sessionViewModel::recordGroundTruth
                 )
             }
         }
@@ -383,6 +392,13 @@ private fun HomeScreen(
                 lineHeight = 22.sp
             )
             Spacer(modifier = Modifier.height(20.dp))
+            if (uiState.isLoading) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally), color = Flame)
+            } else if (uiState.loadError != null) {
+                StatusBanner("레시피를 불러오지 못했습니다", uiState.loadError, BannerTone.Caution)
+            } else if (uiState.recipes.isEmpty()) {
+                StatusBanner("저장된 레시피가 없습니다", "레시피 추가를 눌러 첫 레시피를 만들어 주세요.", BannerTone.Neutral)
+            }
             if (uiState.hasResumableSession && uiState.session != null) {
                 StatusBanner(
                     title = "진행 중인 요리 이어하기",
@@ -720,6 +736,8 @@ private fun CookingScreen(
     onUseFailureCapture: () -> Unit,
     onMockVerdict: (JudgmentVerdict) -> Unit,
     onSetMockEnabled: (Boolean) -> Unit,
+    onServerBaseUrlChange: (String) -> Unit,
+    onApplyServerBaseUrl: () -> Unit,
     onVoice: () -> Unit
 ) {
     val recipe = uiState.selectedRecipe ?: return
@@ -783,6 +801,28 @@ private fun CookingScreen(
                 JudgmentVerdict.entries.forEach { verdict ->
                     SmallGhostButton(verdict.name, { onMockVerdict(verdict) })
                 }
+            }
+            if (!uiState.useMockJudgment) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = uiState.serverBaseUrl,
+                    onValueChange = onServerBaseUrlChange,
+                    label = { Text("판정 서버 주소") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                GhostButton("서버 주소 적용 및 상태 확인", onApplyServerBaseUrl)
+                Spacer(modifier = Modifier.height(8.dp))
+                StatusBanner(
+                    title = when (uiState.serverReady) {
+                        true -> "서버 연결됨"
+                        false -> "서버 연결 실패"
+                        null -> "서버 확인 중"
+                    },
+                    detail = uiState.serverStatusMessage ?: "판정 서버 상태를 확인합니다.",
+                    tone = if (uiState.serverReady == true) BannerTone.Success else BannerTone.Caution
+                )
             }
             Spacer(modifier = Modifier.height(18.dp))
             PrimaryButton(label = "검사 시작", onClick = onStartInspection)
@@ -923,6 +963,10 @@ private fun ManualModeScreen(
             PrimaryButton(label = "다음 단계", onClick = onNext)
             Spacer(modifier = Modifier.height(10.dp))
             GhostButton(label = "자동 확인 다시 켜기", onClick = onResumeAuto)
+            uiState.serverStatusMessage?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it, color = if (uiState.serverReady == false) Color(0xFF9A6700) else Ash, fontSize = 12.sp)
+            }
             Spacer(modifier = Modifier.height(10.dp))
             GhostButton(label = "안내 다시 듣기", onClick = onRepeat)
             Spacer(modifier = Modifier.height(10.dp))
@@ -938,7 +982,8 @@ private fun ManualModeScreen(
 private fun SummaryScreen(
     uiState: CookingSessionUiState,
     onDone: () -> Unit,
-    onDeleteImages: () -> Unit
+    onDeleteImages: () -> Unit,
+    onGroundTruth: (String, JudgmentVerdict) -> Unit
 ) {
     val recipe = uiState.selectedRecipe ?: return
     val session = uiState.session ?: return
@@ -963,18 +1008,39 @@ private fun SummaryScreen(
             }
             val longest = recipe.steps.mapNotNull { step -> session.stepDurationMs(step.order)?.let { step.order to it } }.maxByOrNull { it.second }
             longest?.let { SummaryRow("가장 오래 걸린 단계", "${it.first}단계 · ${formatDuration(it.second)}") }
+            val metrics = session.evaluationMetrics()
+            Spacer(modifier = Modifier.height(18.dp))
+            InfoCard("테스트 정확도") {
+                Text("라벨 ${metrics.labeledCount}건 · 정확도 ${metrics.accuracyPercent}%", color = Flour, fontSize = 12.sp)
+                Text("잘못된 완료 ${metrics.falsePositiveCount}건 · 완료 놓침 ${metrics.missedDoneCount}건 · 판정 불가 ${metrics.cannotTellCount}건", color = Ash, fontSize = 12.sp)
+            }
             if (
                 session.baselineUriByStep.isNotEmpty() ||
                 session.lastCaptureUriByStep.isNotEmpty()
             ) {
-                SessionPhotoGallery(recipe = recipe, session = session)
                 Spacer(modifier = Modifier.height(18.dp))
+                SessionPhotoGallery(recipe = recipe, session = session)
+                Spacer(modifier = Modifier.height(10.dp))
                 GhostButton("세션 이미지 삭제", onDeleteImages)
             }
             Spacer(modifier = Modifier.height(18.dp))
             InfoCard(title = "로그") {
                 session.logs.takeLast(8).forEach { log ->
                     Text("${log.stepOrder}단계 · ${log.message}", color = Flour, fontSize = 12.sp)
+                    if (log.verdict != null && log.requestId != null) {
+                        log.imageUri?.let { CaptureThumbnail(it, "${log.stepOrder}단계 판정 이미지") }
+                        Text(
+                            "요청 ${log.requestedAtMs ?: "-"} · 응답 ${log.respondedAtMs ?: "-"} · 정답 ${log.groundTruth?.name ?: "미입력"}",
+                            color = Ash,
+                            fontSize = 10.sp
+                        )
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            JudgmentVerdict.entries.forEach { truth ->
+                                SmallGhostButton("정답 ${truth.name}") { onGroundTruth(log.requestId, truth) }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(18.dp))
@@ -1078,12 +1144,11 @@ private fun RecipeRow(recipe: Recipe, onClick: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF4A3A28), Color(0xFF2E241A))))
-                    .border(1.dp, Rim, RoundedCornerShape(10.dp))
+            Image(
+                painter = painterResource(R.drawable.recipe_hero),
+                contentDescription = "${recipe.title} 대표 이미지",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(46.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, Rim, RoundedCornerShape(10.dp))
             )
             Column {
                 Text(recipe.title, color = Flour, fontSize = 15.sp, fontWeight = FontWeight.Bold)
@@ -1188,26 +1253,40 @@ private fun CapturedPhotoCard(
 }
 
 @Composable
+private fun CaptureThumbnail(uriValue: String, description: String) {
+    val context = LocalContext.current
+    val bitmap = remember(uriValue) {
+        runCatching {
+            context.contentResolver.openInputStream(Uri.parse(uriValue))?.use(BitmapFactory::decodeStream)
+        }.getOrNull()
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = description,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(140.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, Rim, RoundedCornerShape(12.dp))
+        )
+    } else {
+        Text("이미지를 표시할 수 없습니다.", color = Ash, fontSize = 11.sp)
+    }
+}
+
+@Composable
 private fun StatusBanner(title: String, detail: String, tone: BannerTone) {
-    val background = when (tone) {
-        BannerTone.Progress -> Pan
-        BannerTone.Success -> Herb.copy(alpha = 0.14f)
-        BannerTone.Caution -> Color(0x33E5C04A)
-        BannerTone.Neutral -> PanDark
-    }
-    val border = when (tone) {
-        BannerTone.Progress -> Flame.copy(alpha = 0.35f)
-        BannerTone.Success -> Herb
-        BannerTone.Caution -> Color(0xFFE5C04A)
-        BannerTone.Neutral -> Rim
-    }
+    val palette = statusPalette(tone)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(background)
-            .border(1.dp, border, RoundedCornerShape(16.dp))
+            .background(palette.background)
+            .border(1.dp, palette.border, RoundedCornerShape(16.dp))
             .padding(16.dp)
+            .semantics { contentDescription = "$title. $detail" }
     ) {
         Column {
             Text(title, color = Flour, fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -1229,14 +1308,17 @@ private fun ControlRow(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun SmallGhostButton(label: String, onClick: () -> Unit) {
     Surface(
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .semantics { role = Role.Button }
+            .clickable(onClick = onClick),
         color = Color.Transparent,
         shape = RoundedCornerShape(999.dp),
         border = BorderStroke(1.dp, Rim)
     ) {
         Text(
             label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
             color = Flour,
             fontSize = 12.sp
         )
@@ -1372,11 +1454,20 @@ private fun deviceTitle(state: WearableCameraState): String = when (state) {
     WearableCameraState.Released -> "해제됨"
 }
 
-private enum class BannerTone {
+internal enum class BannerTone {
     Progress,
     Success,
     Caution,
     Neutral
+}
+
+internal data class StatusPalette(val background: Color, val border: Color)
+
+internal fun statusPalette(tone: BannerTone): StatusPalette = when (tone) {
+    BannerTone.Progress -> StatusPalette(Pan, Flame)
+    BannerTone.Success -> StatusPalette(Herb.copy(alpha = 0.12f), Herb)
+    BannerTone.Caution -> StatusPalette(Color(0xFFFFF4CC), Color(0xFFE5A800))
+    BannerTone.Neutral -> StatusPalette(PanDark, Rim)
 }
 
 private class SpeechController(
