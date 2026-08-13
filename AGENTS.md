@@ -34,14 +34,25 @@
 
 ## Git
 
-내 소유 경로 **밖** · 공유 파일 · 여러 커밋짜리 작업 → **브랜치 필수.** 그 외는 main 직접 허용.
+각자 **상시 개인 브랜치**에서 작업하고 `main`에 머지합니다. 기능 단위가 아니라 사람 단위입니다.
+
+| 담당 | 브랜치 |
+|---|---|
+| **1번** 건호 | `dev/keonho` |
+| **2번** 요한 | `dev/yohan` |
+| **3번** 윤우 | `dev/yoonwoo` |
+
+개인 브랜치는 수명이 길어 드리프트가 쌓입니다. **받기 → 커밋 → 올리기** 순서를 지키세요.
 
 ```bash
-git checkout main && git pull
-git checkout -b feature/작업이름      # feature/ fix/ chore/ docs/
-bash server/check_secrets.sh
-git push -u origin feature/작업이름
+git checkout dev/<내이름>
+git merge main                  # ① 받기 — 자주 할수록 충돌이 작다
+git add -A && git commit
+bash server/check_secrets.sh    # ② push 전 필수
+git push                        # ③ 올리기
 ```
+
+`main` 반영은 PR로. **남의 소유 경로를 건드린 PR은 담당자 리뷰를 받습니다.**
 
 ## 빌드·실행
 
