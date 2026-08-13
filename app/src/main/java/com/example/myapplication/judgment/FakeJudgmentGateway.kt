@@ -36,7 +36,9 @@ class FakeJudgmentGateway : JudgmentGateway {
                             verdict = selected.verdict,
                             reasonCode = selected.reasonCode,
                             roundTripMs = roundTrip,
-                            vlmLatencyMs = selected.vlmLatencyMs
+                            vlmLatencyMs = selected.vlmLatencyMs,
+                            requestedAtMs = request.requestedAtMs,
+                            respondedAtMs = System.currentTimeMillis()
                         )
                     )
                 }
@@ -46,7 +48,9 @@ class FakeJudgmentGateway : JudgmentGateway {
                     JudgmentOutcome.Failure(
                         requestId = request.requestId,
                         message = selected.message,
-                        retryable = selected.retryable
+                        retryable = selected.retryable,
+                        requestedAtMs = request.requestedAtMs,
+                        respondedAtMs = System.currentTimeMillis()
                     )
                 }
             }

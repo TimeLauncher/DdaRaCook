@@ -41,7 +41,12 @@ data class CookingSessionUiState(
     val maxExpectedExceeded: Boolean = false,
     val hasResumableSession: Boolean = false,
     val useMockJudgment: Boolean = true,
-    val selectedMockVerdict: JudgmentVerdict = JudgmentVerdict.DONE
+    val selectedMockVerdict: JudgmentVerdict = JudgmentVerdict.DONE,
+    val isLoading: Boolean = false,
+    val loadError: String? = null,
+    val serverReady: Boolean? = null,
+    val serverStatusMessage: String? = null,
+    val serverBaseUrl: String = ""
 ) {
     val selectedRecipe: Recipe?
         get() = recipes.firstOrNull { it.id == selectedRecipeId }

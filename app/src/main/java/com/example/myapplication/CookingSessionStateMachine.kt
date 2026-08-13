@@ -59,7 +59,9 @@ enum class VoiceCommand {
     PREVIOUS,
     CHECK_NOW,
     RESUME_AUTO,
-    INGREDIENTS
+    INGREDIENTS,
+    VERIFY_INGREDIENT,
+    CURRENT_STEP
 }
 
 data class SessionLogEntry(
@@ -73,8 +75,34 @@ data class SessionLogEntry(
     val requestId: String? = null,
     val eventType: String = "INFO",
     val manualOverride: Boolean = false,
-    val overrideType: String? = null
+    val overrideType: String? = null,
+    val requestedAtMs: Long? = null,
+    val respondedAtMs: Long? = null,
+    val imageUri: String? = null,
+    val groundTruth: JudgmentVerdict? = null
 )
+
+data class EvaluationMetrics(
+    val labeledCount: Int,
+    val correctCount: Int,
+    val falsePositiveCount: Int,
+    val missedDoneCount: Int,
+    val cannotTellCount: Int
+) {
+    val accuracyPercent: Int
+        get() = if (labeledCount == 0) 0 else (correctCount * 100) / labeledCount
+}
+
+fun CookingSession.evaluationMetrics(): EvaluationMetrics {
+    val labeled = logs.filter { it.verdict != null && it.groundTruth != null }
+    return EvaluationMetrics(
+        labeledCount = labeled.size,
+        correctCount = labeled.count { it.verdict == it.groundTruth },
+        falsePositiveCount = labeled.count { it.verdict == JudgmentVerdict.DONE && it.groundTruth != JudgmentVerdict.DONE },
+        missedDoneCount = labeled.count { it.verdict != JudgmentVerdict.DONE && it.groundTruth == JudgmentVerdict.DONE },
+        cannotTellCount = labeled.count { it.verdict == JudgmentVerdict.CANNOT_TELL }
+    )
+}
 
 val CookingSession.totalDurationMs: Long
     get() = ((completedAtMs ?: System.currentTimeMillis()) - startedAtMs).coerceAtLeast(0L)

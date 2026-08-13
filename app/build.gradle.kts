@@ -17,6 +17,15 @@ fun configurationValue(name: String, defaultValue: String = ""): String =
         ?: localProperties.getProperty(name)
         ?: defaultValue
 
+fun localTeamToken(): String {
+    val tokenFile = rootProject.file("server/서버 토큰.md")
+    if (!tokenFile.isFile) return ""
+    return Regex("cookassist-[A-Za-z0-9_-]+")
+        .find(tokenFile.readText())
+        ?.value
+        .orEmpty()
+}
+
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
@@ -45,7 +54,7 @@ android {
         buildConfigField(
             "String",
             "JUDGE_TEAM_TOKEN",
-            configurationValue(name = "TEAM_TOKEN").asBuildConfigString()
+            configurationValue(name = "TEAM_TOKEN", defaultValue = localTeamToken()).asBuildConfigString()
         )
     }
 

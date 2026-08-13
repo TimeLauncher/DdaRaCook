@@ -27,10 +27,12 @@ data class JudgeDebugOptions(
 
 class JudgeApiService(
     private val context: Context,
-    private val baseUrl: String = BuildConfig.JUDGE_BASE_URL,
+    baseUrl: String = BuildConfig.JUDGE_BASE_URL,
     private val teamToken: String = BuildConfig.JUDGE_TEAM_TOKEN,
     private val debugOptions: JudgeDebugOptions = JudgeDebugOptions()
 ) : JudgmentGateway {
+    @Volatile
+    private var baseUrl: String = baseUrl
     private val imageNormalizer = ImageNormalizer(context)
     private val mutableState = MutableStateFlow<JudgmentGatewayState>(JudgmentGatewayState.Idle)
     override val state: StateFlow<JudgmentGatewayState> = mutableState.asStateFlow()
@@ -55,6 +57,34 @@ class JudgeApiService(
 
     override suspend fun release() {
         mutableState.value = JudgmentGatewayState.Released
+    }
+
+    suspend fun checkHealth(): ServerHealth = withContext(Dispatchers.IO) {
+        if (teamToken.isBlank()) return@withContext ServerHealth(false, "판정 서버 인증 설정이 없습니다.")
+        val connection = (URL("${baseUrl.trimEnd('/')}/health").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = HEALTH_TIMEOUT_MS
+            readTimeout = HEALTH_TIMEOUT_MS
+        }
+        try {
+            val status = connection.responseCode
+            if (status !in 200..299) return@withContext ServerHealth(false, "판정 서버 상태 확인 실패 ($status)")
+            val body = connection.inputStream.bufferedReader().use(BufferedReader::readText)
+            val json = JSONObject(body)
+            if (json.optString("status") == "ok") ServerHealth(true, "판정 서버 연결 준비 완료")
+            else ServerHealth(false, "판정 서버가 준비되지 않았습니다.")
+        } catch (_: Exception) {
+            ServerHealth(false, "판정 서버에 연결할 수 없습니다.")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun updateBaseUrl(value: String): Boolean {
+        val normalized = value.trim().trimEnd('/')
+        val valid = runCatching { URL(normalized) }.getOrNull()?.protocol in setOf("http", "https")
+        if (valid) baseUrl = normalized
+        return valid
     }
 
     private suspend fun judgeInternal(
@@ -108,7 +138,9 @@ class JudgeApiService(
                         verdict = json.getString("verdict").toVerdict(),
                         reasonCode = json.getString("reasonCode").toReasonCode(),
                         vlmLatencyMs = json.optLong("vlmLatencyMs", 0L),
-                        roundTripMs = roundTripMs
+                        roundTripMs = roundTripMs,
+                        requestedAtMs = request.requestedAtMs,
+                        respondedAtMs = System.currentTimeMillis()
                     )
                 )
             }
@@ -157,7 +189,9 @@ class JudgeApiService(
     ): JudgmentOutcome.Failure = JudgmentOutcome.Failure(
         requestId = request.requestId,
         message = message,
-        retryable = retryable
+        retryable = retryable,
+        requestedAtMs = request.requestedAtMs,
+        respondedAtMs = System.currentTimeMillis()
     )
 
     private fun serverErrorMessage(statusCode: Int, responseBody: String): String {
@@ -169,8 +203,11 @@ class JudgeApiService(
 
     private companion object {
         const val REQUEST_TIMEOUT_MS = 8_000
+        const val HEALTH_TIMEOUT_MS = 5_000
     }
 }
+
+data class ServerHealth(val ready: Boolean, val message: String)
 
 internal data class RetryDirective(val delayMs: Long)
 
