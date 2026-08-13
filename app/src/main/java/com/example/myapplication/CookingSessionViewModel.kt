@@ -47,8 +47,7 @@ class CookingSessionViewModel(
     }
     private val fakeJudgmentGateway = FakeJudgmentGateway()
     private val networkJudgmentGateway = JudgeApiService(application)
-    private val fixtureRecipes = RecipeFixtures.sampleRecipes().filter { it.id == "kimchi" } +
-        RecipeFixtures.sampleRecipes().filter { it.id != "kimchi" }
+    private val fixtureRecipes = RecipeFixtures.sampleRecipes().sortedByDescending(Recipe::isMvpReady)
     private val initialRecipes = persistence.loadRecipes(fixtureRecipes).withAutomaticInspectionInterval()
     private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
     private val initialUseMockJudgment = persistence.loadUseMockJudgment(fallback = false)

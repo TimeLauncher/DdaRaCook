@@ -9,11 +9,22 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
 
     fun loadRecipes(fallback: List<Recipe>): List<Recipe> = runCatching {
         val raw = preferences.getString(KEY_RECIPES, null) ?: return fallback
-        JSONArray(raw).toRecipeList().ifEmpty { fallback }
+        val stored = JSONArray(raw).toRecipeList()
+        if (preferences.getInt(KEY_FIXTURE_VERSION, 0) < CURRENT_FIXTURE_VERSION) {
+            val builtInIds = fallback.mapTo(mutableSetOf(), Recipe::id)
+            val migrated = fallback + stored.filterNot { it.id in builtInIds }
+            saveRecipes(migrated)
+            migrated
+        } else {
+            stored.ifEmpty { fallback }
+        }
     }.getOrDefault(fallback)
 
     fun saveRecipes(recipes: List<Recipe>) {
-        preferences.edit().putString(KEY_RECIPES, recipes.toJson().toString()).apply()
+        preferences.edit()
+            .putString(KEY_RECIPES, recipes.toJson().toString())
+            .putInt(KEY_FIXTURE_VERSION, CURRENT_FIXTURE_VERSION)
+            .apply()
     }
 
     fun loadSession(): CookingSession? = runCatching {
@@ -53,6 +64,8 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SESSION = "active_session"
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
+        const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
+        const val CURRENT_FIXTURE_VERSION = 2
     }
 }
 

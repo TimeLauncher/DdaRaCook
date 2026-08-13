@@ -25,7 +25,7 @@ class FakeJudgmentGatewayTest {
             JudgmentRequest(
                 requestId = "req-1",
                 cookingSessionId = "session-1",
-                recipeId = "kimchi",
+                recipeId = "sausage-vegetable-stir-fry",
                 stepOrder = 1,
                 instruction = "양파를 볶는다",
                 checkType = CheckType.COLOR_CHANGE,
@@ -46,8 +46,19 @@ class FakeJudgmentGatewayTest {
     fun recipeFixtureExposesMvpRecipeFirst() {
         val recipes = RecipeFixtures.sampleRecipes()
 
-        assertEquals("kimchi", recipes.first().id)
+        assertEquals("sausage-vegetable-stir-fry", recipes.first().id)
         assertTrue(recipes.first().isMvpReady)
-        assertTrue(recipes.first().steps.isNotEmpty())
+        assertEquals("소세지야채볶음", recipes.first().title)
+        assertEquals(5, recipes.first().steps.size)
+        assertTrue(recipes.first().steps.first().inspectionPolicy?.requiredConsecutiveDone == 2)
+        assertTrue(recipes.first().steps[1].checkType == CheckType.TIMER_ONLY)
+        assertTrue(recipes.first().steps[1].inspectionPolicy == null)
+        assertTrue(recipes.first().steps[3].checkType == CheckType.STATE_TRANSITION)
+        assertTrue(recipes.first().steps[4].checkType == CheckType.PRESENCE)
+        assertTrue(recipes.first().steps[4].inspectionPolicy?.earliestCheckSeconds == 170)
+        assertTrue(recipes.first().steps.all { limitAnnouncement(it.voicePrompt).split(Regex("(?<=[.!?。！？])\\s+")).size <= 2 })
+
+        val kimchi = recipes.first { it.id == "kimchi" }
+        assertTrue(!kimchi.isMvpReady)
     }
 }

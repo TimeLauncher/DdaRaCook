@@ -72,4 +72,20 @@ class AppPersistenceInstrumentedTest {
         persistence.saveUseMockJudgment(false)
         assertEquals(false, persistence.loadUseMockJudgment())
     }
+
+    @Test
+    fun legacyFixturesMigrateToSausageRecipeAndKeepCustomRecipes() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val fixtures = RecipeFixtures.sampleRecipes()
+        val custom = fixtures.first().copy(id = "custom-recipe", title = "내 레시피", isMvpReady = false)
+        persistence.saveRecipes(listOf(fixtures.first { it.id == "kimchi" }, custom))
+        context.getSharedPreferences("persistence-test", android.content.Context.MODE_PRIVATE)
+            .edit().putInt("recipe_fixture_version", 1).commit()
+
+        val migrated = persistence.loadRecipes(fixtures)
+
+        assertEquals("sausage-vegetable-stir-fry", migrated.first().id)
+        assertEquals(false, migrated.first { it.id == "kimchi" }.isMvpReady)
+        assertNotNull(migrated.firstOrNull { it.id == "custom-recipe" })
+    }
 }
