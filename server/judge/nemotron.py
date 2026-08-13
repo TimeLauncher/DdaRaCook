@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional
 
 from openai import (
@@ -55,6 +57,34 @@ DEFAULT_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
 DEFAULT_TIMEOUT_S = 7.5
 MIN_ATTEMPT_S = 1.5   # 이보다 적게 남았으면 재시도해봐야 헛수고
 RETRY_SLEEP_S = 0.3
+
+
+def _retry_after_seconds(error: RateLimitError) -> float:
+    """429 응답의 `Retry-After`를 초 단위로 읽는다.
+
+    NVIDIA가 대기 시간을 알려주면 그 값을 우선한다. 헤더가 없거나 형식이
+    잘못됐을 때만 짧은 기본 백오프를 쓴다. HTTP-date 형식도 RFC 7231에 맞춰
+    처리하지만, 이 값이 남은 서버 예산을 넘으면 호출부가 기다리지 않고 429를
+    앱에 돌려준다.
+    """
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    value = headers.get("retry-after") if headers else None
+    if value is None:
+        return RETRY_SLEEP_S
+
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        retry_at = parsedate_to_datetime(str(value))
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return RETRY_SLEEP_S
 
 
 class NemotronJudge:
@@ -139,7 +169,7 @@ class NemotronJudge:
         t0 = time.monotonic()
         deadline = t0 + self.timeout_s
         attempted_plain = False   # 샘플링 파라미터를 뺀 재시도를 이미 했는가
-        retried = False
+        retried = False  # 429·연결·5xx를 합쳐 전체 요청에서 1회만 재시도
 
         while True:
             remaining = deadline - time.monotonic()
@@ -184,8 +214,20 @@ class NemotronJudge:
                     f"지원을 의심하세요: {str(e)[:300]}") from e
 
             except RateLimitError as e:
+                delay = _retry_after_seconds(e)
+                # 앱 타임아웃(8초)보다 먼저 응답하려면, 백오프 뒤에도 모델 호출에
+                # 최소 MIN_ATTEMPT_S 만큼은 남아야 한다. 이 조건을 못 맞추면
+                # 기다리지 않고 429를 반환해 앱 쪽 백오프에 맡긴다.
+                can_retry = (
+                    not retried
+                    and (deadline - time.monotonic() - delay) >= MIN_ATTEMPT_S
+                )
+                if can_retry:
+                    retried = True
+                    time.sleep(delay)
+                    continue
                 raise JudgeRateLimit(
-                    f"레이트 리밋(429). 무료 한도를 확인하세요: {str(e)[:200]}") from e
+                    f"레이트 리밋(429). 백오프 후 다시 시도하세요: {str(e)[:200]}") from e
 
             except (APIConnectionError, InternalServerError) as e:
                 if not retried:

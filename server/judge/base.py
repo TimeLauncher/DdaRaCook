@@ -73,7 +73,7 @@ class JudgeTimeout(JudgeError):
 
 
 class JudgeRateLimit(JudgeError):
-    """429. 무료 티어 한도. T2-6에서 백오프 추가 예정."""
+    """429. 서버의 제한된 백오프 재시도 후에도 한도에 걸림."""
     http_status = 429
 
 
