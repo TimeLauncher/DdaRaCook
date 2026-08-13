@@ -100,6 +100,36 @@ def check_auth(authorization: Optional[str]):
         raise HTTPException(403, "토큰이 올바르지 않습니다")
 
 
+@app.middleware("http")
+async def authenticate_judge_step_before_body_validation(request: Request, call_next):
+    """`/judge-step`은 본문을 읽기 전에 인증한다.
+
+    FastAPI의 기본 본문 검증은 엔드포인트 함수에 들어가기 전에 실행된다.
+    이 순서 그대로 두면 인증되지 않은 요청도 422 검증 오류로 필드 구조를
+    알 수 있다. 계약의 401/403 우선순위를 지키기 위해 이 경로만 미리
+    인증하고, 실패 응답도 계약의 `{\"detail\": \"문자열\"}` 형태로 만든다.
+    """
+    if request.method == "POST" and request.url.path == "/judge-step":
+        try:
+            check_auth(request.headers.get("authorization"))
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error_as_bad_request(
+    request: Request, exc: RequestValidationError,
+):
+    """계약의 요청 형식 오류를 FastAPI 기본 422 대신 400으로 통일한다."""
+    # exc.errors()에는 입력 이미지 base64 일부가 포함될 수 있으므로 응답에
+    # 그대로 노출하지 않는다. 앱에는 계약대로 사람이 읽을 수 있는 문자열만 준다.
+    return JSONResponse(
+        status_code=400,
+        content={"detail": "요청 형식이 올바르지 않습니다"},
+    )
+
+
 # X-Mock-Status 로 강제할 수 있는 오류 목록 (CONTRACT.md §5 와 1:1).
 # 문구를 실제 오류와 비슷하게 맞춰둔다. 2번이 오류 메시지를 화면에 띄우는
 # 코드를 짤 때 진짜와 다른 문자열로 테스트하면 의미가 없기 때문이다.
@@ -210,13 +240,10 @@ def health():
 @app.post("/judge-step", response_model=JudgeResponse)
 def judge_step(
     req: JudgeRequest,
-    authorization: Optional[str] = Header(None),
     x_mock_verdict: Optional[str] = Header(None, alias="X-Mock-Verdict"),
     x_mock_delay_ms: Optional[int] = Header(None, alias="X-Mock-Delay-Ms"),
     x_mock_status: Optional[int] = Header(None, alias="X-Mock-Status"),
 ):
-    check_auth(authorization)
-
     # ── Mock 경로 (2번의 분기 테스트용) ──────────────────
     # 헤더 하나로 원하는 응답을 강제로 받을 수 있다.
     #   X-Mock-Verdict: CANNOT_TELL   → 그 판정을 그대로 반환
