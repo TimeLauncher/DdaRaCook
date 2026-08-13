@@ -51,6 +51,29 @@ check_value() {
 check_value TEAM_TOKEN     cookassist-dev-change-me
 check_value NVIDIA_API_KEY nvapi-xxxxxxxxxxxxxxxxxxxx
 
+# ── 4. ⭐ 토큰 "모양" 이 소스에 박혀 있는가 ────────────────
+#    3번 검사는 .env 의 **현재** 값만 찾는다. 그래서 이미 교체한 옛 토큰이나
+#    .env 에 없는 값은 통과한다. 실제로 2026-08-12 에 폐기한 구 TEAM_TOKEN 이
+#    JudgeApiService.kt:12 에 남아 있는데 이 스크립트는 "✅ 안전" 을 냈다.
+#    폐기된 값이라도 커밋에 남으면 안 된다 — 다음 사람이 그대로 복사한다.
+scan_pattern() {
+  local label="$1" pattern="$2" hits
+  #  제외 패스스펙(:!)은 cwd 기준이라 server/ 안의 파일을 못 걸러낸다.
+  #  출력에서 거르는 편이 확실하다 — 플레이스홀더가 사는 두 파일만 뺀다.
+  hits=$(git grep -nIE "$pattern" -- :/ 2>/dev/null \
+         | grep -vE '(^|/)(\.env\.example|check_secrets\.sh):')
+  if [ -n "$hits" ]; then
+    echo "🚨 ${label} 모양의 값이 추적 중인 파일에 있습니다 — 폐기된 값이라도 제거하세요."
+    echo "$hits" | sed 's/^/   /'
+    echo "   앱은 local.properties → BuildConfig, 서버는 .env 를 쓰세요 (AGENTS.md)."
+    fail=1
+  fi
+}
+
+# 접두사 뒤 20자 이상만 잡는다 — 플레이스홀더(cookassist-dev-change-me)는 13자라 안 걸린다.
+scan_pattern TEAM_TOKEN     'cookassist-[A-Za-z0-9_-]{20,}'
+scan_pattern NVIDIA_API_KEY 'nvapi-[A-Za-z0-9_-]{20,}'
+
 if [ $fail -eq 0 ]; then
   echo "✅ 안전 — push 해도 됩니다"
   echo "   추적 파일 $(git ls-files --cached -- :/ | wc -l)개"
