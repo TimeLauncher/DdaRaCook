@@ -28,7 +28,7 @@
 | 촬영 **1↔2** | `camera/CameraContracts.kt` | Meta DAT 타입은 `camera/` 밖으로 나가지 않음. 모든 실패는 `CaptureOutcome.Failure`로만 전달 |
 | 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 코드가 계약을 따름. 변경은 3명 합의 → 버전 올림 → 코드 수정 순서. `CheckType` 값 **추가**는 4곳을 함께(앱 enum · `toServerType()` · 서버 `Literal` · `CHECK_TYPE_HINT`), 값 **이름 변경·삭제는 금지** — 저장된 사용자 레시피가 파싱에 실패해 조용히 사라집니다 |
 | 레시피 **2↔3** | 기능명세서 §5.1.1 | 완료 조건 문장·판정 유형의 정본은 §5.1.1 표. `RecipeFixtures.kt`는 그 표를 옮긴 데이터이며 **3번 소유**(로직 없음, 참조처는 `CookingSessionViewModel`뿐). **문장 수정은 3번 단독**, `checkType`·단계 수·`InspectionPolicy` 변경은 2번과 합의 — `FakeJudgmentGatewayTest`가 단계 인덱스와 유형을 단언합니다. 편집기 UI(`MainActivity`)·저장(`AppPersistence`)·네트워크 배관은 2번 |
-| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 · [`server/이미지규격_요청서.md`](server/이미지규격_요청서.md) | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만 |
+| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만(`judgment/ImageNormalizer.kt`). 규격 감사는 `server/inspect_image.py` |
 
 ## 규칙
 
@@ -84,4 +84,4 @@ python smoke.py --url http://127.0.0.1:8000                 # 왕복 확인
 | [`docs/contract-compliance.md`](docs/contract-compliance.md) | 알려진 위반·미해결 항목 — **작업 시작 전 확인** |
 | [`docs/implementation-checklist.md`](docs/implementation-checklist.md) | 명세서 대비 구현 현황 |
 | [`docs/10-dat-replacement.md`](docs/10-dat-replacement.md) | Fake 카메라 → 실제 DAT 교체 절차 (1번) |
-| [`server/README.md`](server/README.md) · [`server/DEPLOY.md`](server/DEPLOY.md) | 서버 실행 · 배포 · 트러블슈팅 |
+| [`server/README.md`](server/README.md) | 서버 진입 문서 — 상태 · 구조 · 실행 · 배포 · 덫 (3번은 작업 전 필독) |
