@@ -61,6 +61,9 @@ internal const val AUTOMATIC_INSPECTION_INTERVAL_SECONDS = 30
  */
 internal const val BASELINE_CAPTURE_DELAY_SECONDS = 15
 
+/** 검사 차례인데 기준 사진이 아직 없을 때 다시 시도하기까지의 간격. */
+internal const val BASELINE_WAIT_RETRY_SECONDS = 5
+
 internal fun List<Recipe>.withAutomaticInspectionInterval(): List<Recipe> = map { recipe ->
     recipe.copy(
         steps = recipe.steps.map { step ->
