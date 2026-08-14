@@ -280,7 +280,7 @@ curl -s https://ddaracook-server.onrender.com/health
 
 전송 정책 기준을 판정 유형에서 **"완료 조건이 시작 시점 대비 변화를 묻는가"** 로 옮겼습니다.
 
-- `CONTRACT.md` §3.2 개정 · 버전 1.3 (**3인 서명란 미체크**)
+- `CONTRACT.md` §3.2 개정 · 버전 1.3
 - `RecipeStep.needsStartImage` 신설 — 판단을 레시피가 내립니다
 - `shouldSendStartImage()` 가 `CheckType` 확장에서 `RecipeStep` 확장으로 바뀜
 - 기준 사진 촬영을 단계 시작 **15초 뒤**로 지연 (`BASELINE_CAPTURE_DELAY_SECONDS`).
