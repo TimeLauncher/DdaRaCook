@@ -316,6 +316,7 @@ private fun TtaraCookApp(
                     onSetMockEnabled = sessionViewModel::setMockJudgmentEnabled,
                     onServerBaseUrlChange = sessionViewModel::setServerBaseUrl,
                     onApplyServerBaseUrl = sessionViewModel::applyServerBaseUrl,
+                    onFinishParallelTimer = sessionViewModel::debugFinishParallelTimer,
                     onVoice = {
                         if (uiState.audioPermissionGranted) {
                             speechController.startListening()
@@ -330,6 +331,7 @@ private fun TtaraCookApp(
                     wakeWordStatus = wakeWordStatus,
                     onContinue = sessionViewModel::continueToNextStep,
                     onUndo = sessionViewModel::moveToPreviousStep,
+                    onFinishParallelTimer = sessionViewModel::debugFinishParallelTimer,
                     onVoice = {
                         if (uiState.audioPermissionGranted) speechController.startListening() else permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
@@ -527,8 +529,10 @@ private fun RecipeEditorScreen(
             targetIngredients = emptyList(),
             voicePrompt = instruction.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY,
-            // 편집기에는 병렬 타이머 입력이 없다. 편집 중인 단계에 걸려 있던 타이머를 지우지 않는다.
-            parallelTimer = editingIndex?.let { steps.getOrNull(it)?.parallelTimer }
+            // 편집기에는 병렬 타이머 입력이 없다. 편집 중인 단계에 걸려 있던 설정을 지우지 않는다.
+            parallelTimer = editingIndex?.let { steps.getOrNull(it)?.parallelTimer },
+            waitsForParallelTimer = editingIndex?.let { steps.getOrNull(it)?.waitsForParallelTimer } ?: false,
+            baselineOnStepStart = editingIndex?.let { steps.getOrNull(it)?.baselineOnStepStart } ?: false
         )
         val candidate = steps.toMutableList().apply {
             val index = editingIndex
@@ -745,6 +749,7 @@ private fun CookingScreen(
     onSetMockEnabled: (Boolean) -> Unit,
     onServerBaseUrlChange: (String) -> Unit,
     onApplyServerBaseUrl: () -> Unit,
+    onFinishParallelTimer: () -> Unit,
     onVoice: () -> Unit
 ) {
     val recipe = uiState.selectedRecipe ?: return
@@ -786,6 +791,10 @@ private fun CookingScreen(
                     },
                     tone = if (remaining > 0) BannerTone.Progress else BannerTone.Caution
                 )
+                if (remaining > 0) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    SmallGhostButton("디버그 · ${session.parallelTimerLabel ?: "타이머"} 완료", onFinishParallelTimer)
+                }
             }
             Spacer(modifier = Modifier.height(14.dp))
             JudgmentCriteriaCard(step = step, session = session)
@@ -798,6 +807,8 @@ private fun CookingScreen(
                     Text("다음 검사까지 ${uiState.nextInspectionInSeconds ?: "-"}", color = Ash, fontSize = 12.sp)
                 }
             }
+            Spacer(modifier = Modifier.height(14.dp))
+            JudgmentHistoryCard(session = session)
             Spacer(modifier = Modifier.height(14.dp))
             ControlRow("음성/수동") {
                 VoiceButton(uiState = uiState, onClick = onVoice)
@@ -899,6 +910,7 @@ private fun StepDoneScreen(
     wakeWordStatus: WakeWordStatus,
     onContinue: () -> Unit,
     onUndo: () -> Unit,
+    onFinishParallelTimer: () -> Unit,
     onVoice: () -> Unit
 ) {
     val step = uiState.currentStep ?: return
@@ -915,6 +927,18 @@ private fun StepDoneScreen(
                 detail = "자동 DONE ${session.autoDoneCount}회 · 다음 단계로 이동할 수 있습니다.",
                 tone = BannerTone.Success
             )
+            // 앞 단계에서 건 타이머가 끝나야 다음 단계로 들어선다. 왜 안 넘어가는지 보이게 한다.
+            if (session.advanceBlockedByTimer) {
+                Spacer(modifier = Modifier.height(10.dp))
+                StatusBanner(
+                    title = "${session.parallelTimerLabel ?: "타이머"} 기다리는 중",
+                    detail = "${formatDuration((uiState.parallelTimerRemainingSeconds ?: 0) * 1_000L)} 뒤 자동으로 넘어갑니다. " +
+                        "\"다음\"이라고 하면 기다리지 않고 넘어갑니다.",
+                    tone = BannerTone.Progress
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SmallGhostButton("디버그 · ${session.parallelTimerLabel ?: "타이머"} 완료", onFinishParallelTimer)
+            }
             (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.let {
                 Spacer(modifier = Modifier.height(14.dp))
                 CapturedPhotoCard(
@@ -1196,6 +1220,49 @@ private fun RecipeRow(recipe: Recipe, onClick: () -> Unit) {
     }
 }
 
+/**
+ * 판정이 실제로 무엇을 돌려줬는지 보여준다.
+ *
+ * 응답이 없는 것(촬영 실패·네트워크)과 `NOT_DONE`·`CANNOT_TELL`은 화면상 똑같이 "안 넘어감"으로
+ * 보인다. 원인이 다르면 대응도 다르므로 판정마다 결과·사유·왕복 시간을 남긴다.
+ */
+@Composable
+private fun JudgmentHistoryCard(session: CookingSession) {
+    // 판정 실패(NETWORK_FAILURE)도 함께 보여준다. 그게 바로 "응답이 없다"의 정체다.
+    val judgments = session.logs.filter { it.verdict != null || it.eventType == "NETWORK_FAILURE" }
+    InfoCard(title = "판정 기록") {
+        Text(
+            "DONE ${session.autoDoneCount} · NOT_DONE ${session.notDoneCount} · CANNOT_TELL ${session.cannotTellCount}",
+            color = Flour,
+            fontSize = 12.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        if (judgments.isEmpty()) {
+            Text("아직 판정한 적이 없습니다.", color = AshDark, fontSize = 11.sp)
+            return@InfoCard
+        }
+        val clock = SimpleDateFormat("HH:mm:ss", Locale.KOREA)
+        judgments.takeLast(6).reversed().forEach { log ->
+            val elapsed = log.roundTripMs?.let { "${it}ms" } ?: "-"
+            val body = if (log.verdict != null) {
+                "${log.verdict}  ·  ${log.reasonCode?.label ?: "-"}  ·  $elapsed"
+            } else {
+                "응답 없음  ·  ${log.message}"
+            }
+            Text(
+                "${clock.format(Date(log.timestampMs))}  ${log.stepOrder}단계  $body",
+                color = when {
+                    log.verdict == JudgmentVerdict.DONE -> Herb
+                    log.verdict == null -> Color(0xFFE5C04A)
+                    else -> Ash
+                },
+                fontSize = 11.sp,
+                lineHeight = 17.sp
+            )
+        }
+    }
+}
+
 /** 조리 중 화면에서 "무엇을 보고 판정하는지"와 "언제 넘어가는지"를 그대로 보여준다. */
 @Composable
 private fun JudgmentCriteriaCard(step: RecipeStep, session: CookingSession) {
@@ -1271,12 +1338,15 @@ private fun StepCard(step: RecipeStep) {
             }
             step.parallelTimer?.let { timer ->
                 Text(
-                    "병렬 타이머 · ${timer.label} ${formatDuration(timer.durationSeconds * 1_000L)}" +
+                    "병렬 타이머 · 이 단계를 마치면 ${timer.label} ${formatDuration(timer.durationSeconds * 1_000L)} 시작" +
                         " (다음 단계로 넘어가도 계속 흐름)",
                     color = Ash,
                     fontSize = 11.sp,
                     lineHeight = 17.sp
                 )
+            }
+            if (step.waitsForParallelTimer) {
+                Text("앞 단계 타이머가 끝나야 자동으로 시작합니다", color = Ash, fontSize = 11.sp, lineHeight = 17.sp)
             }
             Text(
                 if (!step.isAutoCheck || step.checkType == CheckType.TIMER_ONLY) {
@@ -1638,7 +1708,11 @@ private fun cookingDetail(uiState: CookingSessionUiState): String {
     val session = uiState.session ?: return ""
     val captureState = uiState.cameraState
     val next = uiState.nextInspectionInSeconds?.let { " · 다음 검사 ${it}초" }.orEmpty()
-    return "카메라 ${captureState::class.simpleName} · CANNOT_TELL ${session.cannotTellStreak}회${next}"
+    // 직전 판정이 무엇이었는지 스크롤 없이 보여야 한다. 응답이 없는 것과 NOT_DONE 은 다르다.
+    val last = session.logs.lastOrNull { it.verdict != null }?.let { log ->
+        " · 직전 ${log.verdict}" + (log.reasonCode?.let { "(${it.label})" } ?: "")
+    }.orEmpty()
+    return "카메라 ${captureState::class.simpleName} · CANNOT_TELL ${session.cannotTellStreak}회${next}$last"
 }
 
 private fun deviceTitle(state: WearableCameraState): String = when (state) {

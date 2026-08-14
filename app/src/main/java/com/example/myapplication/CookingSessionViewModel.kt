@@ -412,6 +412,20 @@ class CookingSessionViewModel(
         }
     }
 
+    /**
+     * 디버그 전용 — 병렬 타이머를 지금 끝낸 것으로 만든다.
+     *
+     * 8분을 실제로 기다리지 않고 만료 안내와 대기 해제를 확인하기 위한 것이다.
+     * 만료 시각만 당기고, 안내·자동 진행은 평소와 같은 티커 경로로 흐르게 둔다.
+     */
+    fun debugFinishParallelTimer() {
+        val session = uiState.value.session ?: return
+        if (session.parallelTimerEndsAtMs == null || session.parallelTimerFired) return
+        mutableUiState.update {
+            it.copy(session = session.copy(parallelTimerEndsAtMs = System.currentTimeMillis()))
+        }
+    }
+
     fun continueToNextStep() {
         val state = uiState.value
         var session = state.session ?: return
@@ -472,9 +486,38 @@ class CookingSessionViewModel(
             announceCurrent("${recipe.title} 조리가 끝났습니다.")
             return
         }
-        if (session !== originalSession) mutableUiState.update { it.copy(session = session) }
-        startStep(nextIndex, manualOnly = session.mode == SessionMode.MANUAL_ONLY, manualIncrement = manual)
+
+        // 병렬 타이머는 단계를 **마칠 때** 켠다. "면을 넣으세요"를 듣는 시점에는 아직 면이 물에
+        // 들어가지 않았다. 사용자가 "다음"이라고 한 지금이 면이 들어간 순간이다.
+        val leavingTimer = recipe.steps.getOrNull(session.currentStepIndex)?.parallelTimer
+        val timed = if (leavingTimer == null) session else session.copy(
+            parallelTimerEndsAtMs = now + leavingTimer.durationSeconds * 1_000L,
+            parallelTimerLabel = leavingTimer.label,
+            parallelTimerMessage = leavingTimer.doneAnnouncement,
+            parallelTimerFired = false
+        )
+
+        // 삶아둔 면을 넣는 단계는 면이 익기 전에 시작할 수 없다. 자동 진행만 붙잡고,
+        // 사용자가 "다음"이라고 하면 그대로 보낸다 (F5-1).
+        if (!manual && shouldWaitForParallelTimer(recipe.steps[nextIndex], timed)) {
+            val remaining = timed.parallelTimerRemainingSeconds() ?: 0
+            mutableUiState.update { it.copy(session = timed.copy(advanceBlockedByTimer = true)) }
+            announceCurrent(
+                "${timed.parallelTimerLabel ?: "타이머"}가 끝나면 다음 단계로 갈게요. " +
+                    "${formatRemaining(remaining)} 남았어요."
+            )
+            return
+        }
+
+        mutableUiState.update { it.copy(session = timed.copy(advanceBlockedByTimer = false)) }
+        startStep(nextIndex, manualOnly = timed.mode == SessionMode.MANUAL_ONLY, manualIncrement = manual)
     }
+
+    /** 아직 걸린 적 없는 타이머는 기다리지 않는다 — 영영 오지 않기 때문이다. */
+    private fun shouldWaitForParallelTimer(nextStep: RecipeStep, session: CookingSession): Boolean =
+        nextStep.waitsForParallelTimer &&
+            session.parallelTimerEndsAtMs != null &&
+            !session.parallelTimerFired
 
     fun moveToPreviousStep() {
         val session = uiState.value.session ?: return
@@ -686,15 +729,7 @@ class CookingSessionViewModel(
         val step = recipe.steps[stepIndex]
         val now = System.currentTimeMillis()
 
-        // 병렬 타이머는 단계를 시작할 때 켜고, 이후 단계에서도 끄지 않는다.
-        // 그 단계를 다시 시작하면(예: "이전" 명령) 냄비도 다시 앉히는 것이므로 시계도 다시 건다.
-        val timer = step.parallelTimer
         val session = previous.copy(
-            parallelTimerEndsAtMs =
-                if (timer != null) now + timer.durationSeconds * 1_000L else previous.parallelTimerEndsAtMs,
-            parallelTimerLabel = if (timer != null) timer.label else previous.parallelTimerLabel,
-            parallelTimerMessage = if (timer != null) timer.doneAnnouncement else previous.parallelTimerMessage,
-            parallelTimerFired = if (timer != null) false else previous.parallelTimerFired,
             recipeId = recipe.id,
             phase = CookingPhase.STEP_STARTING,
             mode = if (manualOnly) SessionMode.MANUAL_ONLY else previous.mode,
@@ -731,12 +766,19 @@ class CookingSessionViewModel(
         launchBaselineCapture(step, session.id)
     }
 
-    private fun launchBaselineCapture(step: RecipeStep, cookingSessionId: String) {
+    private fun launchBaselineCapture(
+        step: RecipeStep,
+        cookingSessionId: String,
+        forceImmediate: Boolean = false
+    ) {
         baselineCaptureJob?.cancel()
 
         // 시작 시점 대비 비교를 하는 단계는 기준 사진이 "재료가 팬에 들어간 뒤"여야 한다.
         // 단계 시작 직후에 찍으면 아직 빈 팬이라 비교 자체가 성립하지 않는다.
-        val delayed = step.shouldSendStartImage()
+        //
+        // 다만 앞 단계에서 사용자가 "재료를 넣고 다음"이라고 말했다면 그 시점이 곧 기준점이므로
+        // 기다릴 이유가 없다(`baselineOnStepStart`). 사용자가 "확인해줘"라고 한 경우도 마찬가지다.
+        val delayed = step.shouldSendStartImage() && !step.baselineOnStepStart && !forceImmediate
 
         // 기준 사진과 자동 검사는 **서로 다른 시계**로 돈다. 직렬로 묶으면 첫 검사가
         // 15 + 30 = 45초로 밀린다. 검사 카운트다운은 여기서 바로 시작하고,
@@ -760,8 +802,9 @@ class CookingSessionViewModel(
                 current.currentStep?.order != step.order
             ) return@launch
             // 지연 경로는 이미 WAITING_FOR_CHECK 로 넘어가 있다. 그 외에는 종전대로
-            // 단계 시작 상태에서만 이어간다.
-            if (!delayed && currentSession.phase != CookingPhase.STEP_STARTING) return@launch
+            // 단계 시작 상태에서만 이어간다. 사용자 요청으로 끼어든 촬영은 예외다 — 그때는
+            // 이미 WAITING_FOR_CHECK 이고, 여기서 빠져나가면 대기 중인 수동 검사가 영영 안 돈다.
+            if (!delayed && !forceImmediate && currentSession.phase != CookingPhase.STEP_STARTING) return@launch
 
             if (!captured) {
                 val failure = current.currentCaptureOutcome as? CaptureOutcome.Failure
@@ -895,6 +938,11 @@ class CookingSessionViewModel(
         if (step.shouldSendStartImage() && session.baselineUriByStep[step.order] == null) {
             if (isManualRequest) {
                 pendingManualInspectionStepOrder = step.order
+                // 여기까지 온 수동 요청은 방금 `cancelInspectionWork()`로 기준 촬영 job까지 끊고 왔다.
+                // 다시 걸어주지 않으면 위 pending 이 기다리는 촬영이 영영 오지 않는다.
+                if (baselineCaptureJob == null) {
+                    launchBaselineCapture(step, session.id, forceImmediate = true)
+                }
                 announceCurrent("기준 사진을 먼저 찍고 확인할게요.")
             } else {
                 scheduleInspection(BASELINE_WAIT_RETRY_SECONDS)
@@ -1299,6 +1347,12 @@ class CookingSessionViewModel(
                 }
                 if (remaining == 0 && !session.parallelTimerFired && session.phase != CookingPhase.SESSION_COMPLETED) {
                     announceParallelTimerDone(session, step.order)
+                    // 타이머를 기다리느라 붙잡아 둔 자동 진행이 있으면 풀어준다. 다만 곧바로 넘기면
+                    // 다음 단계 안내가 "면을 건져 두세요"를 덮어써 사용자가 그 말을 듣지 못한다.
+                    if (session.advanceBlockedByTimer) {
+                        delay(AUTO_ADVANCE_DELAY_MS)
+                        advanceToNextStep(manual = false)
+                    }
                 }
                 delay(1_000L)
             }
@@ -1369,6 +1423,18 @@ class CookingSessionViewModel(
         CookingPhase.STEP_COMPLETED -> AppScreen.S6_STEP_DONE
         CookingPhase.SESSION_COMPLETED -> AppScreen.S9_SUMMARY
         else -> AppScreen.S5_COOKING
+    }
+}
+
+/** 음성으로 읽어줄 남은 시간. "3분 20초" · "40초" */
+internal fun formatRemaining(totalSeconds: Int): String {
+    val safe = totalSeconds.coerceAtLeast(0)
+    val minutes = safe / 60
+    val seconds = safe % 60
+    return when {
+        minutes == 0 -> "${seconds}초"
+        seconds == 0 -> "${minutes}분"
+        else -> "${minutes}분 ${seconds}초"
     }
 }
 

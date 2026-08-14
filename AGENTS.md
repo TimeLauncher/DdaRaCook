@@ -3,13 +3,16 @@
 기능 요구사항은 [`요리어시스턴트_기능명세서.md`](요리어시스턴트_기능명세서.md)가 정본입니다.
 이 문서는 **누가 어디를 건드리는가**만 다룹니다.
 
-> **규약은 사고를 막으려고 있지, 일을 막으려고 있지 않습니다.**
-> 아래 소유·경계는 **금지가 아니라 허가 절차**이고, **허가 창구는 3번 한 곳**입니다 —
-> 3번 승인이면 남의 영역도 진행합니다. 담당자가 자리에 없다고 일이 멈추지 않게 하기 위해서입니다.
-> 소유 표는 **누구 허락을 받는가가 아니라 누가 그 코드를 아는가**를 나타냅니다. 바꿨으면 알리세요.
+> **문서는 정본이 아니라 지침입니다. 정본은 코드입니다.**
+> 기능명세서·`CONTRACT.md`는 **참고용**입니다. 문서를 먼저 고치고 코드를 고치는 순서를 지킬 필요 없고,
+> 문서와 코드가 어긋났다고 코드를 되돌릴 이유도 없습니다. 바꿨으면 **한 줄로 기록만** 남기세요.
+> 문서 업데이트가 개발의 병목이 되면 안 됩니다.
 >
-> 다만 [규칙](#규칙)의 기술적 덫(픽스처 버전 · `CheckType` 이름 · 비밀값 · 계약 준수)은 **허가와 무관하게** 지킵니다.
-> 승인으로 풀 수 있는 문제가 아니라, 어기면 조용히 깨지는 것들이기 때문입니다.
+> 소유 표는 **누구 허락을 받는가가 아니라 누가 그 코드를 아는가**를 나타냅니다.
+> 허가가 필요하면 3번 한 곳에서 받고, 바꿨으면 알리세요.
+>
+> 다만 [규칙](#규칙)의 기술적 덫(픽스처 버전 · `CheckType` 이름 · 비밀값 · 계약 동시 수정)은 그대로입니다.
+> 문서 문제가 아니라 어기면 런타임에 조용히 깨지는 것들이기 때문입니다.
 
 ## 소유 영역
 
@@ -27,28 +30,27 @@
 | **2번** | 화면 · 상태 머신 · 검사 스케줄러 · 음성(STT/TTS) · Room |
 | **3번** | 레시피 정의(`RecipeFixtures.kt`) · 판정 계약 매핑(`judgment/JudgeApiService.kt`의 `toServerType()` · `shouldSendStartImage()`) |
 
-**허가받고 변경** — `CONTRACT.md` · `요리어시스턴트_기능명세서.md` · `AGENTS.md` · `.gitattributes` · `.gitignore` · `*.gradle.kts`
+**공용 파일** — `CONTRACT.md` · `요리어시스턴트_기능명세서.md` · `AGENTS.md` · `.gitattributes` · `.gitignore` · `*.gradle.kts`
 
-세 사람 모두가 매일 읽는 문서·설정이라 조용히 바뀌면 다른 사람의 판단 근거가 무너집니다. **3번 허가를 받고 고친 뒤 무엇을 왜 바꿨는지 PR에 남기면 됩니다.** `CONTRACT.md`는 앱과 서버가 동시에 어긋나므로 허가와 별개로 **버전 올림이 반드시 함께** 가야 합니다.
+자유롭게 고치되 **무엇을 왜 바꿨는지 PR에 한 줄** 남깁니다. `CONTRACT.md`의 요청·응답 필드는 문서가 아니라 **배선**이라, 바꾸면 앱과 서버 코드를 같이 고칩니다.
 
 ## 경계
 
 | 경계 | 규정 문서 | 규칙 |
 |---|---|---|
 | 촬영 **1↔2** | `camera/CameraContracts.kt` | Meta DAT 타입은 `camera/` 밖으로 나가지 않음. 모든 실패는 `CaptureOutcome.Failure`로만 전달 |
-| 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 코드가 계약을 따름. 변경은 3번 허가 → 버전 올림 → 코드 수정 순서(순서는 지킵니다 — 뒤집으면 배포된 서버와 앱이 어긋납니다). `CheckType` 값 **추가**는 4곳을 함께(앱 enum · `toServerType()` · 서버 `Literal` · `CHECK_TYPE_HINT`), 값 **이름 변경·삭제는 금지** — 저장된 사용자 레시피가 파싱에 실패해 조용히 사라집니다 |
-| 레시피 **2↔3** | 기능명세서 §5.1.1 | **대표 레시피(쏘야)**의 완료 조건 문장·판정 유형만 §5.1.1 표가 정본이고, 나머지 레시피는 `RecipeFixtures.kt`가 정본입니다(근거는 `docs/`). `RecipeFixtures.kt`는 **3번 소유**(로직 없음, 참조처는 `CookingSessionViewModel`뿐). **문장·`checkType`·단계 수·`InspectionPolicy` 모두 3번이 정합니다.** 단계 수나 인덱스를 바꾸면 `FakeJudgmentGatewayTest`의 단언과 저장된 세션이 함께 어긋나니 그 둘을 같이 고칩니다. 편집기 UI(`MainActivity`)·저장(`AppPersistence`)·네트워크 배관은 2번 |
+| 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 요청·응답 필드를 바꾸면 **앱과 서버를 같은 PR에서** 고칩니다 — 한쪽만 배포하면 깨집니다. `CheckType` 값 **추가**는 4곳을 함께(앱 enum · `toServerType()` · 서버 `Literal` · `CHECK_TYPE_HINT`), 값 **이름 변경·삭제는 금지** — 저장된 사용자 레시피가 파싱에 실패해 조용히 사라집니다 |
+| 레시피 **2↔3** | `RecipeFixtures.kt` | **레시피의 정본은 코드입니다.** 문장·`checkType`·단계 수·`InspectionPolicy` 모두 3번이 정하고, 기능명세서 §5.1.1 표는 참고용이라 나중에 따라오면 됩니다. 단계 수나 인덱스를 바꾸면 `FakeJudgmentGatewayTest`의 단언과 저장된 세션이 함께 어긋나니 그 둘을 같이 고칩니다. 편집기 UI(`MainActivity`)·저장(`AppPersistence`)·네트워크 배관은 2번 |
 | 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만(`judgment/ImageNormalizer.kt`). 규격 감사는 `server/inspect_image.py` |
 
 내 담당 밖을 건드려야 하면 **3번 허가를 받고 진행**합니다. 담당자 동의를 기다리지 않고, 바꾼 뒤 알립니다. `app/`↔`server/`를 넘을 때는 브랜치 + PR로 처리합니다. 권한이 애매하면 멈추지 말고 3번에게 물어본 뒤 진행합니다.
 
 ## 규칙
 
-아래는 **허가로 면제되지 않습니다.** 합의의 문제가 아니라, 어기면 빌드도 테스트도 통과하면서 조용히 깨지는 것들입니다.
+여기 있는 것만 지키면 됩니다. 문서 절차가 아니라, **어기면 빌드도 테스트도 통과하면서 런타임에 조용히 깨지는** 것들입니다.
 
 - **비밀값을 소스에 쓰지 않습니다.** 앱은 `local.properties` → `BuildConfig`, 서버는 `.env` / Render 환경변수
 - push 전 `bash server/check_secrets.sh`
-- `CONTRACT.md`와 코드가 다르면 **코드를 고치거나 불일치를 보고**합니다. 계약을 임의로 수정하지 않습니다
 - **`RecipeFixtures.kt`를 고치면 `AppPersistence.CURRENT_FIXTURE_VERSION`을 함께 +1** 합니다. 안 올리면 기존 설치본은 저장된 옛 레시피를 계속 씁니다 — 빌드도 테스트도 통과해 **증상이 없습니다**
 - 단계 **수**를 바꾼 레시피 변경은 저장된 세션이 `order` 기준으로 어긋납니다. 앱 데이터를 지우고 확인합니다
 - `InspectionPolicy`의 `earliestCheckSeconds`·`checkIntervalSeconds`는 런타임에 30초로 덮입니다(`withAutomaticInspectionInterval`). fixture에 적은 값이 그대로 쓰이지 않으니, 실제로 조절되는 `requiredConsecutiveDone`·`burstSeconds`·`maxExpectedSeconds`로 판단하세요

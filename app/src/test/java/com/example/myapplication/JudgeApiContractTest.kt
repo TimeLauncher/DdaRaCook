@@ -33,8 +33,10 @@ class JudgeApiContractTest {
             .steps
 
         assertFalse(steps[0].shouldSendStartImage())   // 1단계 · 절대 판정
-        assertTrue(steps[2].shouldSendStartImage())    // 3단계 · 시작 대비 색 변화
-        assertTrue(steps[3].shouldSendStartImage())    // 4단계 · 시작 대비 형태 변화
+        assertFalse(steps[2].shouldSendStartImage())   // 3단계 · 투입 존재 판정
+        assertTrue(steps[3].shouldSendStartImage())    // 4단계 · 시작 대비 색 변화
+        assertFalse(steps[4].shouldSendStartImage())   // 5단계 · 투입 존재 판정
+        assertTrue(steps[5].shouldSendStartImage())    // 6단계 · 시작 대비 형태 변화
     }
 
     private fun step(checkType: CheckType, needsStartImage: Boolean) = RecipeStep(

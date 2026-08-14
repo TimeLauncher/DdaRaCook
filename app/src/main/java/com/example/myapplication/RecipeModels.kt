@@ -40,7 +40,27 @@ data class RecipeStep(
     val targetIngredients: List<String>,
     val voicePrompt: String,
     val isAutoCheck: Boolean,
-    val parallelTimer: ParallelTimer? = null
+    /**
+     * 이 단계를 **마칠 때** 켜지는 병렬 타이머 (`ParallelTimer`).
+     *
+     * 단계에 들어설 때가 아니라 나갈 때 켠다. "면을 넣으세요"를 듣는 시점에는 아직 면이 물에
+     * 들어가지 않았다. 사용자가 "다음"이라고 말한 그 순간이 면이 들어간 순간이다.
+     */
+    val parallelTimer: ParallelTimer? = null,
+    /**
+     * 앞 단계에서 켠 병렬 타이머가 끝나야 자동으로 들어설 수 있는 단계인가.
+     *
+     * 삶아둔 면을 넣는 단계는 면이 익기 전에 시작할 수 없다. 자동 진행만 붙잡고,
+     * 사용자가 "다음"이라고 하면 그대로 보낸다 — 판정은 틀릴 수 있고 사용자가 항상 덮어쓴다(F5-1).
+     */
+    val waitsForParallelTimer: Boolean = false,
+    /**
+     * 기준 사진을 **단계 시작 즉시** 찍는가.
+     *
+     * 앞 단계가 "재료를 넣고 다음이라고 말해주세요"인 경우, 사용자가 "다음"이라고 한 그 시점이
+     * 곧 재료가 팬에 들어간 시점이다. 기준점을 시간(15초)으로 추측하지 않고 사용자에게 받는다.
+     */
+    val baselineOnStepStart: Boolean = false
 )
 
 /**
@@ -141,6 +161,10 @@ fun Recipe.validationErrors(): List<String> = buildList {
             if (timer.durationSeconds <= 0) add("${step.order}단계 병렬 타이머 시간은 1초 이상이어야 합니다.")
             if (timer.label.isBlank()) add("${step.order}단계 병렬 타이머 이름이 필요합니다.")
             if (timer.doneAnnouncement.isBlank()) add("${step.order}단계 병렬 타이머 완료 안내가 필요합니다.")
+        }
+        // 기다릴 타이머가 앞에 없으면 자동 진행이 영영 오지 않는다.
+        if (step.waitsForParallelTimer && steps.none { it.order < step.order && it.parallelTimer != null }) {
+            add("${step.order}단계가 기다릴 병렬 타이머가 앞 단계에 없습니다.")
         }
         if (step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY) {
             if (step.checkCondition.isNullOrBlank()) add("${step.order}단계 완료 조건이 필요합니다.")
