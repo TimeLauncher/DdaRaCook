@@ -65,7 +65,7 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 4
+        const val CURRENT_FIXTURE_VERSION = 8
     }
 }
 
@@ -92,6 +92,8 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
                         put("targetIngredients", JSONArray(step.targetIngredients))
                         put("voicePrompt", step.voicePrompt)
                         put("isAutoCheck", step.isAutoCheck)
+                        put("waitsForParallelTimer", step.waitsForParallelTimer)
+                        put("baselineOnStepStart", step.baselineOnStepStart)
                         step.parallelTimer?.let { timer ->
                             put("parallelTimer", JSONObject().apply {
                                 put("label", timer.label)
@@ -159,7 +161,9 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                         targetIngredients = List(targetsJson.length()) { targetsJson.getString(it) },
                         voicePrompt = step.getString("voicePrompt"),
                         isAutoCheck = step.getBoolean("isAutoCheck"),
-                        parallelTimer = parallelTimer
+                        parallelTimer = parallelTimer,
+                        waitsForParallelTimer = step.optBoolean("waitsForParallelTimer"),
+                        baselineOnStepStart = step.optBoolean("baselineOnStepStart")
                     )
                 )
             }
@@ -209,6 +213,7 @@ private fun CookingSession.toJson() = JSONObject().apply {
     put("parallelTimerLabel", parallelTimerLabel)
     put("parallelTimerMessage", parallelTimerMessage)
     put("parallelTimerFired", parallelTimerFired)
+    put("advanceBlockedByTimer", advanceBlockedByTimer)
     put("logs", JSONArray().also { array -> logs.forEach { array.put(it.toJson()) } })
 }
 
@@ -246,7 +251,8 @@ private fun JSONObject.toSession(): CookingSession {
         parallelTimerEndsAtMs = optNullableLong("parallelTimerEndsAtMs"),
         parallelTimerLabel = optString("parallelTimerLabel").takeIf(String::isNotBlank),
         parallelTimerMessage = optString("parallelTimerMessage").takeIf(String::isNotBlank),
-        parallelTimerFired = optBoolean("parallelTimerFired")
+        parallelTimerFired = optBoolean("parallelTimerFired"),
+        advanceBlockedByTimer = optBoolean("advanceBlockedByTimer")
     )
 }
 

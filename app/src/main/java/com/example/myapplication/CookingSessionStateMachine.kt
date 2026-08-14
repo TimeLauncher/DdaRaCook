@@ -33,7 +33,9 @@ data class CookingSession(
     val parallelTimerEndsAtMs: Long? = null,
     val parallelTimerLabel: String? = null,
     val parallelTimerMessage: String? = null,
-    val parallelTimerFired: Boolean = false
+    val parallelTimerFired: Boolean = false,
+    /** 다음 단계가 `waitsForParallelTimer`라 자동 진행을 붙잡고 있는 중인가. */
+    val advanceBlockedByTimer: Boolean = false
 )
 
 /** 병렬 타이머 남은 초. 타이머가 없으면 null, 다 됐으면 0. */

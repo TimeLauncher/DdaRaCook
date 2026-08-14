@@ -49,6 +49,42 @@ class CookingDomainTest {
     }
 
     @Test
+    fun recipeValidationRejectsWaitWithoutEarlierTimer() {
+        val recipe = Recipe(
+            id = "custom",
+            title = "테스트",
+            ingredients = emptyList(),
+            steps = listOf(
+                RecipeStep(
+                    order = 1,
+                    instruction = "삶은 면을 넣는다",
+                    checkType = CheckType.PRESENCE,
+                    checkCondition = "면이 들어갔는가",
+                    needsStartImage = false,
+                    inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 60),
+                    targetIngredients = emptyList(),
+                    voicePrompt = "면을 넣으세요",
+                    isAutoCheck = true,
+                    waitsForParallelTimer = true
+                )
+            ),
+            heroNote = "",
+            isMvpReady = false
+        )
+
+        // 앞에 켤 타이머가 없으면 자동 진행이 영영 오지 않는다.
+        assertTrue(recipe.validationErrors().any { "기다릴 병렬 타이머" in it })
+    }
+
+    @Test
+    fun formatRemainingReadsNaturally() {
+        assertEquals("40초", formatRemaining(40))
+        assertEquals("3분", formatRemaining(180))
+        assertEquals("3분 20초", formatRemaining(200))
+        assertEquals("0초", formatRemaining(-5))
+    }
+
+    @Test
     fun recipeValidationRejectsBrokenParallelTimer() {
         val recipe = Recipe(
             id = "custom",
