@@ -17,5 +17,6 @@ class WakeWordControllerTest {
         assertFalse(isTtaraCookWakeWord("다음 단계"))
         assertFalse(isTtaraCookWakeWord("따라"))
         assertFalse(isTtaraCookWakeWord("쿡"))
+        assertFalse(isTtaraCookWakeWord("지금 따라쿡 불러줘"))
     }
 }

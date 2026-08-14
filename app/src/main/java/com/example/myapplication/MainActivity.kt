@@ -153,7 +153,7 @@ private fun TtaraCookApp(
         onRecognitionFinished = {
             speechControllerHolder[0]?.recognitionFinished()
         },
-        onCommandRecognitionUseChanged = { active ->
+        onAudioUseChanged = { active ->
             if (active) wakeControllerHolder[0]?.pause() else wakeControllerHolder[0]?.resume()
         }
     )
@@ -164,7 +164,7 @@ private fun TtaraCookApp(
             onWakeWord = {
                 speechController.speak(
                     message = "네.",
-                    onStart = speechController::startListening
+                    onDone = speechController::startListening
                 )
             },
             onStatus = { wakeWordStatus = it }
@@ -1577,15 +1577,16 @@ private class SpeechController(
     private val onTranscript: (String) -> Unit,
     private val onListeningChanged: (Boolean) -> Unit,
     private val onError: (String) -> Unit,
-    private val onCommandRecognitionUseChanged: (Boolean) -> Unit
+    private val onAudioUseChanged: (Boolean) -> Unit
 ) {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val startCallbacks = mutableMapOf<String, () -> Unit>()
     private val completionCallbacks = mutableMapOf<String, () -> Unit>()
     private var utteranceSequence = 0L
     private var activeUtteranceId: String? = null
+    private var ttsActive = false
     private var recognitionActive = false
-    private var reportedRecognitionActive = false
+    private var reportedAudioUseActive = false
 
     init {
         textToSpeech?.setOnUtteranceProgressListener(
@@ -1633,9 +1634,8 @@ private class SpeechController(
         activeUtteranceId = utteranceId
         if (onStart != null) startCallbacks[utteranceId] = onStart
         if (onDone != null) completionCallbacks[utteranceId] = onDone
-        // Keep the wake-word detector running during TTS so the user can interrupt
-        // an announcement by saying "따라쿡". QUEUE_FLUSH below replaces that
-        // announcement with the short acknowledgement when the wake word fires.
+        ttsActive = true
+        reportAudioUse()
         val result = tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
         if (result == TextToSpeech.ERROR) {
             startCallbacks.remove(utteranceId)?.invoke()
@@ -1657,13 +1657,13 @@ private class SpeechController(
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_000L)
         }
         recognitionActive = true
-        reportRecognitionUse()
+        reportAudioUse()
         onListeningChanged(true)
         runCatching { recognizer.startListening(intent) }
             .onFailure { error ->
                 onListeningChanged(false)
                 recognitionActive = false
-                reportRecognitionUse()
+                reportAudioUse()
                 onError("음성 인식을 시작하지 못했습니다: ${error.message ?: error.javaClass.simpleName}")
             }
     }
@@ -1688,18 +1688,21 @@ private class SpeechController(
             if (runCompletion && callback != null) {
                 callback()
             }
+            ttsActive = false
+            reportAudioUse()
         }
     }
 
     fun recognitionFinished() {
         recognitionActive = false
-        reportRecognitionUse()
+        reportAudioUse()
     }
 
-    private fun reportRecognitionUse() {
-        if (reportedRecognitionActive == recognitionActive) return
-        reportedRecognitionActive = recognitionActive
-        onCommandRecognitionUseChanged(recognitionActive)
+    private fun reportAudioUse() {
+        val active = ttsActive || recognitionActive
+        if (reportedAudioUseActive == active) return
+        reportedAudioUseActive = active
+        onAudioUseChanged(active)
     }
 }
 
@@ -1710,7 +1713,7 @@ private fun rememberSpeechController(
     onListeningChanged: (Boolean) -> Unit,
     onError: (String) -> Unit,
     onRecognitionFinished: () -> Unit,
-    onCommandRecognitionUseChanged: (Boolean) -> Unit
+    onAudioUseChanged: (Boolean) -> Unit
 ): SpeechController {
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
     var recognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
@@ -1770,7 +1773,7 @@ private fun rememberSpeechController(
             onTranscript = onTranscript,
             onListeningChanged = onListeningChanged,
             onError = onError,
-            onCommandRecognitionUseChanged = onCommandRecognitionUseChanged
+            onAudioUseChanged = onAudioUseChanged
         )
     }
 }

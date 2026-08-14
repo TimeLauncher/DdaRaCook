@@ -271,7 +271,7 @@ class WakeWordController(
 
     override fun onResult(hypothesis: String) = detectWakeWord(hypothesis, "text")
 
-    override fun onPartialResult(hypothesis: String) = detectWakeWord(hypothesis, "partial")
+    override fun onPartialResult(hypothesis: String) = Unit
 
     override fun onFinalResult(hypothesis: String) {
         detectWakeWord(hypothesis, "text")
@@ -339,4 +339,4 @@ class WakeWordController(
 }
 
 internal fun isTtaraCookWakeWord(text: String): Boolean =
-    text.filterNot(Char::isWhitespace).contains("따라쿡")
+    text.filterNot(Char::isWhitespace) == "따라쿡"
