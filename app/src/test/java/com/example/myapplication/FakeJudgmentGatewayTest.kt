@@ -30,6 +30,7 @@ class FakeJudgmentGatewayTest {
                 instruction = "양파를 볶는다",
                 checkType = CheckType.COLOR_CHANGE,
                 checkCondition = "양파가 반투명해졌는가",
+                needsStartImage = true,
                 elapsedSeconds = 10,
                 baselineImageUri = "content://baseline",
                 currentImageUri = "content://current"
@@ -54,8 +55,13 @@ class FakeJudgmentGatewayTest {
         assertTrue(recipes.first().steps[1].checkType == CheckType.TIMER_ONLY)
         assertTrue(recipes.first().steps[1].inspectionPolicy == null)
         assertTrue(recipes.first().steps[3].checkType == CheckType.STATE_TRANSITION)
-        assertTrue(recipes.first().steps[4].checkType == CheckType.PRESENCE)
-        assertTrue(recipes.first().steps[4].inspectionPolicy?.earliestCheckSeconds == 170)
+        assertTrue(recipes.first().steps[4].checkType == CheckType.TIMER_ONLY)
+        assertTrue(recipes.first().steps[4].inspectionPolicy?.maxExpectedSeconds == 180)
+
+        // 1단계와 4단계는 같은 STATE_TRANSITION 이지만 시작 이미지 정책이 반대다.
+        // 1단계는 "덩어리가 없는가"(절대), 4단계는 "시작 시점 사진과 비교해"(상대) — CONTRACT §3.2
+        assertTrue(!recipes.first().steps[0].needsStartImage)
+        assertTrue(recipes.first().steps[3].needsStartImage)
         assertTrue(recipes.first().steps.all { limitAnnouncement(it.voicePrompt).split(Regex("(?<=[.!?。！？])\\s+")).size <= 2 })
 
         val kimchi = recipes.first { it.id == "kimchi" }

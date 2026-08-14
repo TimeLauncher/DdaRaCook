@@ -9,7 +9,7 @@
 |---|---|
 | **1번** 기기·카메라 | `app/` — **2번과 공동 소유** |
 | **2번** 앱·상태·음성 | `app/` — **1번과 공동 소유** |
-| **3번** AI·서버·평가 | `server/` |
+| **3번** AI·서버·평가 | `server/` · **레시피 정의**(`app/`의 `RecipeFixtures.kt` — 아래 경계 표 참조) |
 
 ⚠️ **`app/`은 경로로 나누지 않습니다.** 그래서 **무엇을 건드릴지 먼저 알리고** 작업합니다. 아래는 소유가 아니라 **주로 누가 보는가**입니다.
 
@@ -17,6 +17,7 @@
 |---|---|
 | **1번** | `camera/` · DAT 연동 · **이미지 정규화**(`judgment/ImageNormalizer.kt` — 위치는 `camera/` 밖이지만 담당은 1번, 아래 경계 표 참조) |
 | **2번** | 화면 · 상태 머신 · 검사 스케줄러 · 음성(STT/TTS) · Room |
+| **3번** | 레시피 정의(`RecipeFixtures.kt`) · 판정 계약 매핑(`judgment/JudgeApiService.kt`의 `toServerType()` · `shouldSendStartImage()`) |
 
 **단독 변경 금지** — `CONTRACT.md` · `요리어시스턴트_기능명세서.md` · `AGENTS.md` · `.gitattributes` · `.gitignore` · `*.gradle.kts`
 
@@ -25,8 +26,9 @@
 | 경계 | 규정 문서 | 규칙 |
 |---|---|---|
 | 촬영 **1↔2** | `camera/CameraContracts.kt` | Meta DAT 타입은 `camera/` 밖으로 나가지 않음. 모든 실패는 `CaptureOutcome.Failure`로만 전달 |
-| 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 코드가 계약을 따름. 변경은 3명 합의 → 버전 올림 → 코드 수정 순서 |
-| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 · [`server/이미지규격_요청서.md`](server/이미지규격_요청서.md) | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만 |
+| 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 코드가 계약을 따름. 변경은 3명 합의 → 버전 올림 → 코드 수정 순서. `CheckType` 값 **추가**는 4곳을 함께(앱 enum · `toServerType()` · 서버 `Literal` · `CHECK_TYPE_HINT`), 값 **이름 변경·삭제는 금지** — 저장된 사용자 레시피가 파싱에 실패해 조용히 사라집니다 |
+| 레시피 **2↔3** | 기능명세서 §5.1.1 | 완료 조건 문장·판정 유형의 정본은 §5.1.1 표. `RecipeFixtures.kt`는 그 표를 옮긴 데이터이며 **3번 소유**(로직 없음, 참조처는 `CookingSessionViewModel`뿐). **문장 수정은 3번 단독**, `checkType`·단계 수·`InspectionPolicy` 변경은 2번과 합의 — `FakeJudgmentGatewayTest`가 단계 인덱스와 유형을 단언합니다. 편집기 UI(`MainActivity`)·저장(`AppPersistence`)·네트워크 배관은 2번 |
+| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만(`judgment/ImageNormalizer.kt`). 규격 감사는 `server/inspect_image.py` |
 
 ## 규칙
 
@@ -34,7 +36,11 @@
 - **비밀값을 소스에 쓰지 않습니다.** 앱은 `local.properties` → `BuildConfig`, 서버는 `.env` / Render 환경변수
 - push 전 `bash server/check_secrets.sh`
 - `CONTRACT.md`와 코드가 다르면 **코드를 고치거나 불일치를 보고**합니다. 계약을 임의로 수정하지 않습니다
-- Fake 구현(`FakeWearableCameraGateway` · `FakeJudgmentGateway`)을 실제 구현으로 착각하지 않습니다. **현재 앱은 서버를 호출하지 않습니다**
+- **`RecipeFixtures.kt`를 고치면 `AppPersistence.CURRENT_FIXTURE_VERSION`을 함께 +1** 합니다. 안 올리면 기존 설치본은 저장된 옛 레시피를 계속 씁니다 — 빌드도 테스트도 통과해 **증상이 없습니다**
+- 단계 **수**를 바꾼 레시피 변경은 저장된 세션이 `order` 기준으로 어긋납니다. 앱 데이터를 지우고 확인합니다
+- `InspectionPolicy`의 `earliestCheckSeconds`·`checkIntervalSeconds`는 런타임에 30초로 덮입니다(`withAutomaticInspectionInterval`). fixture에 적은 값이 그대로 쓰이지 않으니, 실제로 조절되는 `requiredConsecutiveDone`·`burstSeconds`·`maxExpectedSeconds`로 판단하세요
+- 단계 안내를 **손으로 쓴 문자열로 화면에 내보내지 않습니다.** 조리 화면의 "판정 기준" 카드가 `checkCondition`·`checkType`·`InspectionPolicy` 런타임 값에서 문구를 만듭니다 — 그래야 실제 동작과 어긋날 수 없습니다
+- Fake 구현(`FakeWearableCameraGateway` · `FakeJudgmentGateway`)을 실제 구현으로 착각하지 않습니다. 앱은 기본값이 실제 서버 호출입니다(`useMockJudgment = false`)
 - 기능 ID(`F4-3` 등)는 기능명세서에서 확인한 뒤 인용합니다
 
 ## Git
@@ -58,6 +64,7 @@ git push                        # ③ 올리기
 ```
 
 `main` 반영은 PR로. **`app/`을 건드린 PR은 1번·2번이 서로 리뷰**하고, `app/`↔`server/`를 넘은 PR은 해당 담당자 리뷰를 받습니다.
+레시피 변경 PR은 **3번이 덮어쓰기 설치로 직접 확인한 뒤** 머지합니다 — 위 `CURRENT_FIXTURE_VERSION` 함정은 코드 리뷰로 보이지 않습니다.
 
 ## 빌드·실행
 
@@ -79,4 +86,4 @@ python smoke.py --url http://127.0.0.1:8000                 # 왕복 확인
 | [`docs/contract-compliance.md`](docs/contract-compliance.md) | 알려진 위반·미해결 항목 — **작업 시작 전 확인** |
 | [`docs/implementation-checklist.md`](docs/implementation-checklist.md) | 명세서 대비 구현 현황 |
 | [`docs/10-dat-replacement.md`](docs/10-dat-replacement.md) | Fake 카메라 → 실제 DAT 교체 절차 (1번) |
-| [`server/README.md`](server/README.md) · [`server/DEPLOY.md`](server/DEPLOY.md) | 서버 실행 · 배포 · 트러블슈팅 |
+| [`server/README.md`](server/README.md) | 서버 진입 문서 — 상태 · 구조 · 실행 · 배포 · 덫 (3번은 작업 전 필독) |

@@ -516,6 +516,7 @@ private fun RecipeEditorScreen(
             instruction = instruction.trim(),
             checkType = checkType,
             checkCondition = condition.trim().takeIf(String::isNotBlank),
+            needsStartImage = checkType == CheckType.COLOR_CHANGE,
             inspectionPolicy = if (checkType == CheckType.TIMER_ONLY) null else InspectionPolicy(
                 earliestCheckSeconds = earliestValue!!,
                 checkIntervalSeconds = intervalValue!!,
@@ -525,7 +526,6 @@ private fun RecipeEditorScreen(
             ),
             targetIngredients = emptyList(),
             voicePrompt = instruction.trim(),
-            helperText = condition.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY
         )
         val candidate = steps.toMutableList().apply {
@@ -708,7 +708,11 @@ private fun DeviceScreen(
                         else -> "연결 다시 준비"
                     },
                     onClick = onAdvance,
-                    enabled = uiState.cameraState != WearableCameraState.Registering
+                    // 실제 DAT는 Meta AI 앱에서 등록이 끝날 때까지 눌러도 소용이 없어 막아 둔다.
+                    // 반면 Fake 는 Registering 에서 시작하므로(openDevicePreparation) 여기서 막으면
+                    // 빠져나갈 길이 없다. Fake 일 때만 통과시킨다 — DAT 경로 동작은 그대로다.
+                    enabled = uiState.useFakeCamera ||
+                        uiState.cameraState != WearableCameraState.Registering
                 )
                 if (uiState.useFakeCamera) {
                     Spacer(modifier = Modifier.height(10.dp))
@@ -769,11 +773,15 @@ private fun CookingScreen(
                 StatusBanner("예상 시간 초과", "계속 조리하거나 수동 모드로 전환할 수 있습니다.", BannerTone.Caution)
             }
             Spacer(modifier = Modifier.height(14.dp))
-            InfoCard(title = "자동 검사") {
-                Text("최초 검사 ${step.inspectionPolicy?.earliestCheckSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
-                Text("재검사 간격 ${step.inspectionPolicy?.checkIntervalSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
-                Text("연속 DONE ${step.inspectionPolicy?.requiredConsecutiveDone ?: 1}회", color = Flour, fontSize = 12.sp)
-                Text("다음 검사까지 ${uiState.nextInspectionInSeconds ?: "-"}", color = Ash, fontSize = 12.sp)
+            JudgmentCriteriaCard(step = step, session = session)
+            // 수동 단계에는 검사 일정이 없다. 0초짜리 카드를 남기면 검사하는 것처럼 읽힌다.
+            if (step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY) {
+                Spacer(modifier = Modifier.height(14.dp))
+                InfoCard(title = "자동 검사") {
+                    Text("최초 검사 ${step.inspectionPolicy?.earliestCheckSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
+                    Text("재검사 간격 ${step.inspectionPolicy?.checkIntervalSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
+                    Text("다음 검사까지 ${uiState.nextInspectionInSeconds ?: "-"}", color = Ash, fontSize = 12.sp)
+                }
             }
             Spacer(modifier = Modifier.height(14.dp))
             ControlRow("음성/수동") {
@@ -1173,6 +1181,48 @@ private fun RecipeRow(recipe: Recipe, onClick: () -> Unit) {
     }
 }
 
+/** 조리 중 화면에서 "무엇을 보고 판정하는지"와 "언제 넘어가는지"를 그대로 보여준다. */
+@Composable
+private fun JudgmentCriteriaCard(step: RecipeStep, session: CookingSession) {
+    val automatic = step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY
+    InfoCard(title = "판정 기준") {
+        if (!automatic) {
+            Text("사진으로 판정하지 않는 단계입니다.", color = Flour, fontSize = 13.sp, lineHeight = 19.sp)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text("\"다음\"이라고 말하거나 다음 버튼을 누르면 넘어갑니다.", color = Ash, fontSize = 11.sp, lineHeight = 17.sp)
+            return@InfoCard
+        }
+
+        Text(
+            step.checkCondition ?: "완료 조건이 설정되지 않았습니다.",
+            color = Flour,
+            fontSize = 13.sp,
+            lineHeight = 19.sp
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text("판정 유형 · ${step.checkType.userLabel} · ${step.checkType.label}", color = Ash, fontSize = 11.sp)
+
+        val required = (step.inspectionPolicy?.requiredConsecutiveDone ?: 1).coerceAtLeast(1)
+        val achieved = session.consecutiveDoneCount.coerceIn(0, required)
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            if (required == 1) "위 조건이 확인되면 다음 단계로 넘어갑니다."
+            else "위 조건이 연속 ${required}회 확인되면 다음 단계로 넘어갑니다. (지금 $achieved/$required · 어긋나면 처음부터 다시)",
+            color = if (achieved > 0) Herb else Ash,
+            fontSize = 11.sp,
+            lineHeight = 17.sp
+        )
+        if (session.cannotTellStreak > 0) {
+            Text(
+                "확인 실패 ${session.cannotTellStreak}/3 — 3회가 되면 자동 확인을 멈추고 수동으로 넘깁니다.",
+                color = Flame,
+                fontSize = 11.sp,
+                lineHeight = 17.sp
+            )
+        }
+    }
+}
+
 @Composable
 private fun StepCard(step: RecipeStep) {
     Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Pan)) {
@@ -1183,11 +1233,28 @@ private fun StepCard(step: RecipeStep) {
             Spacer(modifier = Modifier.height(8.dp))
             Text("${step.checkType.userLabel} · ${step.checkType.label}", color = Ash, fontSize = 12.sp)
             step.inspectionPolicy?.let { policy ->
-                Text("예상 ${formatDuration(policy.maxExpectedSeconds * 1_000L)} · 최초 검사 ${policy.earliestCheckSeconds}초", color = AshDark, fontSize = 11.sp)
+                val expected = "예상 ${formatDuration(policy.maxExpectedSeconds * 1_000L)}"
+                // 자동 검사를 하지 않는 단계에 "최초 검사"를 적으면 검사하는 것처럼 읽힌다.
+                val automatic = step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY
+                Text(
+                    if (automatic) "$expected · 최초 검사 ${policy.earliestCheckSeconds}초" else expected,
+                    color = AshDark,
+                    fontSize = 11.sp
+                )
             }
             step.checkCondition?.let {
                 Text("완료 조건 · $it", color = Ash, fontSize = 11.sp, lineHeight = 17.sp)
             }
+            Text(
+                if (!step.isAutoCheck || step.checkType == CheckType.TIMER_ONLY) {
+                    "넘어가기 · 직접 \"다음\""
+                } else {
+                    val required = (step.inspectionPolicy?.requiredConsecutiveDone ?: 1).coerceAtLeast(1)
+                    if (required == 1) "넘어가기 · 조건 확인 1회" else "넘어가기 · 조건 연속 ${required}회"
+                },
+                color = AshDark,
+                fontSize = 11.sp
+            )
         }
     }
 }

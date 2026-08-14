@@ -27,10 +27,18 @@ data class RecipeStep(
     val instruction: String,
     val checkType: CheckType,
     val checkCondition: String?,
+    /**
+     * 완료 조건이 **시작 시점 대비 변화**를 묻는가 (CONTRACT §3.2).
+     *
+     * 판정 유형으로는 가를 수 없다. 쏘야 1단계와 4단계는 둘 다 STATE_TRANSITION 이지만
+     * 1단계는 "덩어리가 없는가"(절대 판정)이고 4단계는 "처음보다 벌어졌는가"(상대 판정)다.
+     * true 면 기준 사진을 단계 시작 직후가 아니라 재료가 팬에 들어간 뒤에 찍고,
+     * 판정 요청에 `startImage` 로 함께 보낸다.
+     */
+    val needsStartImage: Boolean,
     val inspectionPolicy: InspectionPolicy?,
     val targetIngredients: List<String>,
     val voicePrompt: String,
-    val helperText: String,
     val isAutoCheck: Boolean
 )
 
@@ -44,6 +52,17 @@ data class InspectionPolicy(
 )
 
 internal const val AUTOMATIC_INSPECTION_INTERVAL_SECONDS = 30
+
+/**
+ * `needsStartImage` 단계에서 기준 사진을 찍기까지 기다리는 시간.
+ *
+ * 단계 안내가 나간 직후에는 아직 재료가 팬에 들어가지 않았다. 그 상태를 기준으로 삼으면
+ * "시작 시점 대비 변화"를 물을 수 없다. 재료가 들어갈 만한 시간을 준 뒤에 찍는다.
+ */
+internal const val BASELINE_CAPTURE_DELAY_SECONDS = 15
+
+/** 검사 차례인데 기준 사진이 아직 없을 때 다시 시도하기까지의 간격. */
+internal const val BASELINE_WAIT_RETRY_SECONDS = 5
 
 internal fun List<Recipe>.withAutomaticInspectionInterval(): List<Recipe> = map { recipe ->
     recipe.copy(

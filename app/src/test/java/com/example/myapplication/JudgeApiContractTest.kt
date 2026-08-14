@@ -19,11 +19,35 @@ class JudgeApiContractTest {
     }
 
     @Test
-    fun onlyColorChangeSendsStartImage() {
-        assertTrue(CheckType.COLOR_CHANGE.shouldSendStartImage())
-        assertFalse(CheckType.STATE_TRANSITION.shouldSendStartImage())
-        assertFalse(CheckType.COUNT.shouldSendStartImage())
+    fun startImagePolicyFollowsStepNotCheckType() {
+        // CONTRACT §3.2 — 같은 판정 유형이라도 완료 조건이 상대 판정이면 시작 이미지를 보낸다.
+        // 판정 유형으로 가르던 v1.2 규칙으로는 아래 두 단계를 구분할 수 없었다.
+        assertFalse(step(CheckType.STATE_TRANSITION, needsStartImage = false).shouldSendStartImage())
+        assertTrue(step(CheckType.STATE_TRANSITION, needsStartImage = true).shouldSendStartImage())
     }
+
+    @Test
+    fun mvpRecipeCarriesContractStartImagePolicy() {
+        val steps = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+
+        assertFalse(steps[0].shouldSendStartImage())   // 1단계 · 절대 판정
+        assertTrue(steps[2].shouldSendStartImage())    // 3단계 · 시작 대비 색 변화
+        assertTrue(steps[3].shouldSendStartImage())    // 4단계 · 시작 대비 형태 변화
+    }
+
+    private fun step(checkType: CheckType, needsStartImage: Boolean) = RecipeStep(
+        order = 1,
+        instruction = "익힌다",
+        checkType = checkType,
+        checkCondition = "변했는가",
+        needsStartImage = needsStartImage,
+        inspectionPolicy = null,
+        targetIngredients = emptyList(),
+        voicePrompt = "익혀주세요",
+        isAutoCheck = true
+    )
 
     @Test
     fun unknownReasonCodeFallsBackToOther() {

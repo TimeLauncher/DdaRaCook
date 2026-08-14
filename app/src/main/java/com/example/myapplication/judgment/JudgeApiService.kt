@@ -6,6 +6,7 @@ import com.example.myapplication.BuildConfig
 import com.example.myapplication.CheckType
 import com.example.myapplication.JudgmentVerdict
 import com.example.myapplication.ReasonCode
+import com.example.myapplication.RecipeStep
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -167,7 +168,7 @@ class JudgeApiService(
             put("checkType", request.checkType.toServerType())
             put("checkCondition", request.checkCondition.orEmpty())
             put("elapsedSeconds", request.elapsedSeconds)
-            if (request.checkType.shouldSendStartImage()) {
+            if (request.needsStartImage) {
                 put(
                     "startImage",
                     request.baselineImageUri?.let(::readImageAsBase64) ?: JSONObject.NULL
@@ -234,7 +235,15 @@ internal fun JudgeDebugOptions.toHeaders(): Map<String, String> = buildMap {
     }
 }
 
-internal fun CheckType.shouldSendStartImage(): Boolean = this == CheckType.COLOR_CHANGE
+/**
+ * CONTRACT §3.2 — `startImage` 전송 여부.
+ *
+ * v1.2까지는 `checkType == COLOR_CHANGE` 로 정했으나, 판정 유형으로는 가를 수 없다.
+ * 쏘야 1단계와 4단계는 둘 다 STATE_CHANGE 인데 1단계는 절대 판정("덩어리가 없는가"),
+ * 4단계는 상대 판정("처음보다 벌어졌는가")이다. 기준을 **완료 조건이 시작 시점 대비
+ * 변화를 묻는가**로 옮기고, 그 판단은 레시피가 `RecipeStep.needsStartImage` 로 내린다.
+ */
+internal fun RecipeStep.shouldSendStartImage(): Boolean = needsStartImage
 
 internal fun CheckType.toServerType(): String = when (this) {
     CheckType.PRESENCE -> "PRESENCE"

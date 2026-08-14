@@ -18,6 +18,7 @@ import com.example.myapplication.judgment.FakeJudgmentGateway
 import com.example.myapplication.judgment.JudgmentOutcome
 import com.example.myapplication.judgment.JudgmentRequest
 import com.example.myapplication.judgment.JudgeApiService
+import com.example.myapplication.judgment.shouldSendStartImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -723,41 +724,62 @@ class CookingSessionViewModel(
 
     private fun launchBaselineCapture(step: RecipeStep, cookingSessionId: String) {
         baselineCaptureJob?.cancel()
+
+        // 시작 시점 대비 비교를 하는 단계는 기준 사진이 "재료가 팬에 들어간 뒤"여야 한다.
+        // 단계 시작 직후에 찍으면 아직 빈 팬이라 비교 자체가 성립하지 않는다.
+        val delayed = step.shouldSendStartImage()
+
+        // 기준 사진과 자동 검사는 **서로 다른 시계**로 돈다. 직렬로 묶으면 첫 검사가
+        // 15 + 30 = 45초로 밀린다. 검사 카운트다운은 여기서 바로 시작하고,
+        // 기준 사진은 아래 코루틴이 제 시간에 따로 찍는다.
+        if (delayed) {
+            mutableUiState.update { ui ->
+                val session = ui.session ?: return@update ui
+                ui.copy(session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK))
+            }
+            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+        }
+
         baselineCaptureJob = viewModelScope.launch {
+            if (delayed) delay(BASELINE_CAPTURE_DELAY_SECONDS * 1_000L)
             val captured = captureBaseline(step)
             baselineCaptureJob = null
             val current = uiState.value
             val currentSession = current.session
             if (
                 currentSession?.id != cookingSessionId ||
-                current.currentStep?.order != step.order ||
-                currentSession.phase != CookingPhase.STEP_STARTING
+                current.currentStep?.order != step.order
             ) return@launch
+            // 지연 경로는 이미 WAITING_FOR_CHECK 로 넘어가 있다. 그 외에는 종전대로
+            // 단계 시작 상태에서만 이어간다.
+            if (!delayed && currentSession.phase != CookingPhase.STEP_STARTING) return@launch
 
-            if (captured) {
-                val runPendingManualInspection =
-                    pendingManualInspectionStepOrder == step.order
-                if (runPendingManualInspection) {
-                    pendingManualInspectionStepOrder = null
-                }
-                mutableUiState.update { ui ->
-                    ui.copy(
-                        consecutiveCameraTimeouts = 0,
-                        session = (ui.session ?: currentSession).copy(phase = CookingPhase.WAITING_FOR_CHECK)
-                    )
-                }
-                if (runPendingManualInspection) {
-                    triggerImmediateInspection()
-                } else {
-                    scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
-                }
-            } else {
+            if (!captured) {
                 val failure = current.currentCaptureOutcome as? CaptureOutcome.Failure
                 transitionToManualMode(
                     "기준 사진 촬영을 완료하지 못했습니다. " +
                         "${failure?.userMessage ?: "안경 카메라를 확인해주세요."} " +
                         "연결을 확인한 뒤 자동 확인 다시를 말해주세요."
                 )
+                return@launch
+            }
+
+            val runPendingManualInspection = pendingManualInspectionStepOrder == step.order
+            if (runPendingManualInspection) {
+                pendingManualInspectionStepOrder = null
+            }
+            mutableUiState.update { ui ->
+                val session = ui.session ?: currentSession
+                ui.copy(
+                    consecutiveCameraTimeouts = 0,
+                    // 지연 경로에서는 이미 검사가 돌고 있을 수 있어 단계를 되돌리지 않는다.
+                    session = if (delayed) session else session.copy(phase = CookingPhase.WAITING_FOR_CHECK)
+                )
+            }
+            if (runPendingManualInspection) {
+                triggerImmediateInspection()
+            } else if (!delayed) {
+                scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             }
         }
     }
@@ -858,6 +880,19 @@ class CookingSessionViewModel(
         val session = state.session ?: return
         val step = state.currentStep ?: return
         if (session.mode == SessionMode.MANUAL_ONLY) return
+
+        // 두 시계가 따로 도는 대가로, 검사가 기준 사진보다 먼저 올 수 있다.
+        // 상대 조건을 1장으로 물으면 서버는 200 을 돌려주고 **조용히 틀린다.** 기다린다.
+        if (step.shouldSendStartImage() && session.baselineUriByStep[step.order] == null) {
+            if (isManualRequest) {
+                pendingManualInspectionStepOrder = step.order
+                announceCurrent("기준 사진을 먼저 찍고 확인할게요.")
+            } else {
+                scheduleInspection(BASELINE_WAIT_RETRY_SECONDS)
+            }
+            return
+        }
+
         mutableUiState.update {
             it.copy(
                 currentScreen = AppScreen.S5_COOKING,
@@ -1003,6 +1038,7 @@ class CookingSessionViewModel(
                         instruction = step.instruction,
                         checkType = step.checkType,
                         checkCondition = step.checkCondition,
+                        needsStartImage = step.shouldSendStartImage(),
                         elapsedSeconds = state.session?.let {
                             ((System.currentTimeMillis() - it.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
                         } ?: 0,

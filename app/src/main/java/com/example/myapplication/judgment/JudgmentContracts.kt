@@ -13,6 +13,8 @@ data class JudgmentRequest(
     val instruction: String,
     val checkType: CheckType,
     val checkCondition: String?,
+    /** CONTRACT §3.2 — 완료 조건이 시작 시점 대비 변화를 묻는가. `RecipeStep`에서 그대로 온다. */
+    val needsStartImage: Boolean,
     val elapsedSeconds: Int,
     val baselineImageUri: String?,
     val currentImageUri: String,
