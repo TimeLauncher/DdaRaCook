@@ -41,6 +41,7 @@ data class CookingSessionUiState(
     val lastVoiceTranscript: String? = null,
     val stepElapsedSeconds: Int = 0,
     val maxExpectedExceeded: Boolean = false,
+    val parallelTimerRemainingSeconds: Int? = null,
     val hasResumableSession: Boolean = false,
     val resumeAutoAfterDeviceSetup: Boolean = false,
     val useFakeCamera: Boolean = true,

@@ -33,6 +33,50 @@ class CookingDomainTest {
 
 
     @Test
+    fun parallelTimerRemainingCountsDownFromAbsoluteDeadline() {
+        val now = 1_000_000L
+        val session = CookingSession(
+            id = "session",
+            recipeId = "beef-brisket-pasta",
+            parallelTimerEndsAtMs = now + 480_000L
+        )
+
+        assertEquals(480, session.parallelTimerRemainingSeconds(now))
+        assertEquals(1, session.parallelTimerRemainingSeconds(now + 479_500L))
+        // 만료 후에도 음수로 내려가지 않는다. 티커는 0을 만료 신호로 쓴다.
+        assertEquals(0, session.parallelTimerRemainingSeconds(now + 500_000L))
+        assertEquals(null, CookingSession(id = "s", recipeId = "r").parallelTimerRemainingSeconds(now))
+    }
+
+    @Test
+    fun recipeValidationRejectsBrokenParallelTimer() {
+        val recipe = Recipe(
+            id = "custom",
+            title = "테스트",
+            ingredients = emptyList(),
+            steps = listOf(
+                RecipeStep(
+                    order = 1,
+                    instruction = "면을 삶는다",
+                    checkType = CheckType.TIMER_ONLY,
+                    checkCondition = null,
+                    needsStartImage = false,
+                    inspectionPolicy = null,
+                    targetIngredients = emptyList(),
+                    voicePrompt = "면을 삶아주세요",
+                    isAutoCheck = false,
+                    parallelTimer = ParallelTimer(label = "면 삶기", durationSeconds = 0, doneAnnouncement = "")
+                )
+            ),
+            heroNote = "",
+            isMvpReady = false
+        )
+
+        assertTrue(recipe.validationErrors().any { "병렬 타이머 시간" in it })
+        assertTrue(recipe.validationErrors().any { "병렬 타이머 완료 안내" in it })
+    }
+
+    @Test
     fun recipeValidationRejectsMissingAutomaticPolicy() {
         val recipe = Recipe(
             id = "custom",

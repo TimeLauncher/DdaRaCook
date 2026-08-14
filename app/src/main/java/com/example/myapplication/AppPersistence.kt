@@ -65,7 +65,7 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 3
+        const val CURRENT_FIXTURE_VERSION = 4
     }
 }
 
@@ -92,6 +92,13 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
                         put("targetIngredients", JSONArray(step.targetIngredients))
                         put("voicePrompt", step.voicePrompt)
                         put("isAutoCheck", step.isAutoCheck)
+                        step.parallelTimer?.let { timer ->
+                            put("parallelTimer", JSONObject().apply {
+                                put("label", timer.label)
+                                put("durationSeconds", timer.durationSeconds)
+                                put("doneAnnouncement", timer.doneAnnouncement)
+                            })
+                        }
                         step.inspectionPolicy?.let { policy ->
                             put("inspectionPolicy", JSONObject().apply {
                                 put("earliestCheckSeconds", policy.earliestCheckSeconds)
@@ -131,6 +138,13 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                         maxExpectedSeconds = it.getInt("maxExpectedSeconds")
                     )
                 }
+                val parallelTimer = step.optJSONObject("parallelTimer")?.let {
+                    ParallelTimer(
+                        label = it.getString("label"),
+                        durationSeconds = it.getInt("durationSeconds"),
+                        doneAnnouncement = it.getString("doneAnnouncement")
+                    )
+                }
                 val targetsJson = step.getJSONArray("targetIngredients")
                 val checkType = enumValueOf<CheckType>(step.getString("checkType"))
                 add(
@@ -144,7 +158,8 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                         inspectionPolicy = policy,
                         targetIngredients = List(targetsJson.length()) { targetsJson.getString(it) },
                         voicePrompt = step.getString("voicePrompt"),
-                        isAutoCheck = step.getBoolean("isAutoCheck")
+                        isAutoCheck = step.getBoolean("isAutoCheck"),
+                        parallelTimer = parallelTimer
                     )
                 )
             }
@@ -189,6 +204,11 @@ private fun CookingSession.toJson() = JSONObject().apply {
     put("lastRoundTripMs", lastRoundTripMs)
     put("lastVlmLatencyMs", lastVlmLatencyMs)
     put("lastReasonCode", lastReasonCode?.name)
+    // 앱을 껐다 켜도 냄비는 계속 끓는다. 남은 시간이 아니라 만료 **시각**을 저장한다.
+    put("parallelTimerEndsAtMs", parallelTimerEndsAtMs)
+    put("parallelTimerLabel", parallelTimerLabel)
+    put("parallelTimerMessage", parallelTimerMessage)
+    put("parallelTimerFired", parallelTimerFired)
     put("logs", JSONArray().also { array -> logs.forEach { array.put(it.toJson()) } })
 }
 
@@ -222,7 +242,11 @@ private fun JSONObject.toSession(): CookingSession {
         stepStartedAtMsByOrder = optJSONObject("stepStartedAtMsByOrder").toLongMap(),
         stepCompletedAtMsByOrder = optJSONObject("stepCompletedAtMsByOrder").toLongMap(),
         completedStepOrders = optJSONArray("completedStepOrders").toIntSet(),
-        lastReasonCode = optString("lastReasonCode").enumOrNull<ReasonCode>()
+        lastReasonCode = optString("lastReasonCode").enumOrNull<ReasonCode>(),
+        parallelTimerEndsAtMs = optNullableLong("parallelTimerEndsAtMs"),
+        parallelTimerLabel = optString("parallelTimerLabel").takeIf(String::isNotBlank),
+        parallelTimerMessage = optString("parallelTimerMessage").takeIf(String::isNotBlank),
+        parallelTimerFired = optBoolean("parallelTimerFired")
     )
 }
 

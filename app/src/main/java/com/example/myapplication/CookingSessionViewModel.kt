@@ -685,7 +685,16 @@ class CookingSessionViewModel(
         val previous = state.session ?: createFreshSession(recipeId = recipe.id)
         val step = recipe.steps[stepIndex]
         val now = System.currentTimeMillis()
+
+        // 병렬 타이머는 단계를 시작할 때 켜고, 이후 단계에서도 끄지 않는다.
+        // 그 단계를 다시 시작하면(예: "이전" 명령) 냄비도 다시 앉히는 것이므로 시계도 다시 건다.
+        val timer = step.parallelTimer
         val session = previous.copy(
+            parallelTimerEndsAtMs =
+                if (timer != null) now + timer.durationSeconds * 1_000L else previous.parallelTimerEndsAtMs,
+            parallelTimerLabel = if (timer != null) timer.label else previous.parallelTimerLabel,
+            parallelTimerMessage = if (timer != null) timer.doneAnnouncement else previous.parallelTimerMessage,
+            parallelTimerFired = if (timer != null) false else previous.parallelTimerFired,
             recipeId = recipe.id,
             phase = CookingPhase.STEP_STARTING,
             mode = if (manualOnly) SessionMode.MANUAL_ONLY else previous.mode,
@@ -1280,10 +1289,44 @@ class CookingSessionViewModel(
                 val step = state.currentStep ?: break
                 val elapsed = ((System.currentTimeMillis() - session.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
                 val maximum = step.inspectionPolicy?.maxExpectedSeconds ?: Int.MAX_VALUE
-                mutableUiState.update { it.copy(stepElapsedSeconds = elapsed, maxExpectedExceeded = elapsed > maximum) }
+                val remaining = session.parallelTimerRemainingSeconds()
+                mutableUiState.update {
+                    it.copy(
+                        stepElapsedSeconds = elapsed,
+                        maxExpectedExceeded = elapsed > maximum,
+                        parallelTimerRemainingSeconds = remaining
+                    )
+                }
+                if (remaining == 0 && !session.parallelTimerFired && session.phase != CookingPhase.SESSION_COMPLETED) {
+                    announceParallelTimerDone(session, step.order)
+                }
                 delay(1_000L)
             }
         }
+    }
+
+    /**
+     * 병렬 타이머 만료 안내. 지금 어느 단계에 있든 그 위로 올라간다.
+     *
+     * `parallelTimerFired` 를 먼저 세워 1초마다 도는 티커가 같은 안내를 반복하지 않게 한다.
+     */
+    private fun announceParallelTimerDone(session: CookingSession, currentStepOrder: Int) {
+        val message = session.parallelTimerMessage ?: return
+        mutableUiState.update { ui ->
+            val current = ui.session ?: return@update ui
+            if (current.parallelTimerFired) return@update ui
+            ui.copy(
+                session = current.copy(
+                    parallelTimerFired = true,
+                    logs = current.logs + SessionLogEntry(
+                        timestampMs = System.currentTimeMillis(),
+                        stepOrder = currentStepOrder,
+                        message = "병렬 타이머 완료(${current.parallelTimerLabel ?: "타이머"}): $message"
+                    )
+                )
+            )
+        }
+        announceCurrent(message)
     }
 
     private fun judgmentLog(
