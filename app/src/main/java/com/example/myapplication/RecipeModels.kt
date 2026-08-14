@@ -39,7 +39,27 @@ data class RecipeStep(
     val inspectionPolicy: InspectionPolicy?,
     val targetIngredients: List<String>,
     val voicePrompt: String,
-    val isAutoCheck: Boolean
+    val isAutoCheck: Boolean,
+    val parallelTimer: ParallelTimer? = null
+)
+
+/**
+ * 단계를 시작할 때 함께 켜지고, **다음 단계로 넘어가도 계속 도는** 시계.
+ *
+ * 냄비는 단계와 무관하게 끓는다. 면을 넣고 손질 단계로 넘어가도 8분은 계속 흘러야 하고,
+ * 다 됐을 때는 그때 진행 중인 단계 위로 안내가 올라와야 한다.
+ * 단계 경과 시간(`stepElapsedSeconds`)은 단계가 바뀌면 리셋되므로 이것을 대신할 수 없다.
+ *
+ * 만료 시각은 세션에 절대 시각으로 남는다(`CookingSession.parallelTimerEndsAtMs`).
+ * 앱을 껐다 켜도 냄비는 계속 끓고 있기 때문이다.
+ */
+@Immutable
+data class ParallelTimer(
+    /** 조리 화면 남은 시간 칩에 쓰는 짧은 이름. 예: "면 삶기" */
+    val label: String,
+    val durationSeconds: Int,
+    /** 만료 시 읽어주는 문구. F6-6에 따라 2문장 이내. */
+    val doneAnnouncement: String
 )
 
 @Immutable
@@ -117,6 +137,11 @@ fun Recipe.validationErrors(): List<String> = buildList {
     if (steps.isEmpty()) add("조리 단계가 한 개 이상 필요합니다.")
     steps.forEach { step ->
         if (step.instruction.isBlank()) add("${step.order}단계 안내 문구가 필요합니다.")
+        step.parallelTimer?.let { timer ->
+            if (timer.durationSeconds <= 0) add("${step.order}단계 병렬 타이머 시간은 1초 이상이어야 합니다.")
+            if (timer.label.isBlank()) add("${step.order}단계 병렬 타이머 이름이 필요합니다.")
+            if (timer.doneAnnouncement.isBlank()) add("${step.order}단계 병렬 타이머 완료 안내가 필요합니다.")
+        }
         if (step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY) {
             if (step.checkCondition.isNullOrBlank()) add("${step.order}단계 완료 조건이 필요합니다.")
             val policy = step.inspectionPolicy

@@ -526,7 +526,9 @@ private fun RecipeEditorScreen(
             ),
             targetIngredients = emptyList(),
             voicePrompt = instruction.trim(),
-            isAutoCheck = checkType != CheckType.TIMER_ONLY
+            isAutoCheck = checkType != CheckType.TIMER_ONLY,
+            // 편집기에는 병렬 타이머 입력이 없다. 편집 중인 단계에 걸려 있던 타이머를 지우지 않는다.
+            parallelTimer = editingIndex?.let { steps.getOrNull(it)?.parallelTimer }
         )
         val candidate = steps.toMutableList().apply {
             val index = editingIndex
@@ -771,6 +773,19 @@ private fun CookingScreen(
             if (uiState.maxExpectedExceeded) {
                 Spacer(modifier = Modifier.height(8.dp))
                 StatusBanner("예상 시간 초과", "계속 조리하거나 수동 모드로 전환할 수 있습니다.", BannerTone.Caution)
+            }
+            // 병렬 타이머는 이 단계의 것이 아니다. 앞 단계에서 걸어둔 냄비가 계속 끓고 있다는 표시다.
+            uiState.parallelTimerRemainingSeconds?.let { remaining ->
+                Spacer(modifier = Modifier.height(8.dp))
+                StatusBanner(
+                    title = session.parallelTimerLabel ?: "타이머",
+                    detail = if (remaining > 0) {
+                        "${formatDuration(remaining * 1_000L)} 남음 · 단계가 바뀌어도 계속 흐릅니다"
+                    } else {
+                        session.parallelTimerMessage ?: "타이머가 끝났습니다."
+                    },
+                    tone = if (remaining > 0) BannerTone.Progress else BannerTone.Caution
+                )
             }
             Spacer(modifier = Modifier.height(14.dp))
             JudgmentCriteriaCard(step = step, session = session)
@@ -1190,6 +1205,15 @@ private fun JudgmentCriteriaCard(step: RecipeStep, session: CookingSession) {
             Text("사진으로 판정하지 않는 단계입니다.", color = Flour, fontSize = 13.sp, lineHeight = 19.sp)
             Spacer(modifier = Modifier.height(6.dp))
             Text("\"다음\"이라고 말하거나 다음 버튼을 누르면 넘어갑니다.", color = Ash, fontSize = 11.sp, lineHeight = 17.sp)
+            step.parallelTimer?.let { timer ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    "${timer.label} ${formatDuration(timer.durationSeconds * 1_000L)}는 넘어간 뒤에도 계속 흐릅니다. 다 되면 알려드립니다.",
+                    color = Ash,
+                    fontSize = 11.sp,
+                    lineHeight = 17.sp
+                )
+            }
             return@InfoCard
         }
 
@@ -1244,6 +1268,15 @@ private fun StepCard(step: RecipeStep) {
             }
             step.checkCondition?.let {
                 Text("완료 조건 · $it", color = Ash, fontSize = 11.sp, lineHeight = 17.sp)
+            }
+            step.parallelTimer?.let { timer ->
+                Text(
+                    "병렬 타이머 · ${timer.label} ${formatDuration(timer.durationSeconds * 1_000L)}" +
+                        " (다음 단계로 넘어가도 계속 흐름)",
+                    color = Ash,
+                    fontSize = 11.sp,
+                    lineHeight = 17.sp
+                )
             }
             Text(
                 if (!step.isAutoCheck || step.checkType == CheckType.TIMER_ONLY) {

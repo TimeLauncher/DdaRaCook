@@ -28,8 +28,20 @@ data class CookingSession(
     val stepStartedAtMsByOrder: Map<Int, Long> = emptyMap(),
     val stepCompletedAtMsByOrder: Map<Int, Long> = emptyMap(),
     val completedStepOrders: Set<Int> = emptySet(),
-    val lastReasonCode: ReasonCode? = null
+    val lastReasonCode: ReasonCode? = null,
+    /** 병렬 타이머 만료 **절대 시각**. 단계가 바뀌어도 유지된다 (`RecipeStep.parallelTimer`). */
+    val parallelTimerEndsAtMs: Long? = null,
+    val parallelTimerLabel: String? = null,
+    val parallelTimerMessage: String? = null,
+    val parallelTimerFired: Boolean = false
 )
+
+/** 병렬 타이머 남은 초. 타이머가 없으면 null, 다 됐으면 0. */
+fun CookingSession.parallelTimerRemainingSeconds(nowMs: Long = System.currentTimeMillis()): Int? {
+    val endsAt = parallelTimerEndsAtMs ?: return null
+    val remainingMs = (endsAt - nowMs).coerceAtLeast(0L)
+    return ((remainingMs + 999L) / 1_000L).toInt()
+}
 
 enum class CookingPhase {
     IDLE,
