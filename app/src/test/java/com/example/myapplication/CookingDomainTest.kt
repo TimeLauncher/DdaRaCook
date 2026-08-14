@@ -44,10 +44,10 @@ class CookingDomainTest {
                     instruction = "익힌다",
                     checkType = CheckType.COLOR_CHANGE,
                     checkCondition = "색이 변했는가",
+                    needsStartImage = true,
                     inspectionPolicy = null,
                     targetIngredients = emptyList(),
                     voicePrompt = "익혀주세요",
-                    helperText = "",
                     isAutoCheck = true
                 )
             ),

@@ -516,6 +516,7 @@ private fun RecipeEditorScreen(
             instruction = instruction.trim(),
             checkType = checkType,
             checkCondition = condition.trim().takeIf(String::isNotBlank),
+            needsStartImage = checkType == CheckType.COLOR_CHANGE,
             inspectionPolicy = if (checkType == CheckType.TIMER_ONLY) null else InspectionPolicy(
                 earliestCheckSeconds = earliestValue!!,
                 checkIntervalSeconds = intervalValue!!,
@@ -525,7 +526,6 @@ private fun RecipeEditorScreen(
             ),
             targetIngredients = emptyList(),
             voicePrompt = instruction.trim(),
-            helperText = condition.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY
         )
         val candidate = steps.toMutableList().apply {
@@ -774,11 +774,14 @@ private fun CookingScreen(
             }
             Spacer(modifier = Modifier.height(14.dp))
             JudgmentCriteriaCard(step = step, session = session)
-            Spacer(modifier = Modifier.height(14.dp))
-            InfoCard(title = "자동 검사") {
-                Text("최초 검사 ${step.inspectionPolicy?.earliestCheckSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
-                Text("재검사 간격 ${step.inspectionPolicy?.checkIntervalSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
-                Text("다음 검사까지 ${uiState.nextInspectionInSeconds ?: "-"}", color = Ash, fontSize = 12.sp)
+            // 수동 단계에는 검사 일정이 없다. 0초짜리 카드를 남기면 검사하는 것처럼 읽힌다.
+            if (step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY) {
+                Spacer(modifier = Modifier.height(14.dp))
+                InfoCard(title = "자동 검사") {
+                    Text("최초 검사 ${step.inspectionPolicy?.earliestCheckSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
+                    Text("재검사 간격 ${step.inspectionPolicy?.checkIntervalSeconds ?: 0}초", color = Flour, fontSize = 12.sp)
+                    Text("다음 검사까지 ${uiState.nextInspectionInSeconds ?: "-"}", color = Ash, fontSize = 12.sp)
+                }
             }
             Spacer(modifier = Modifier.height(14.dp))
             ControlRow("음성/수동") {
@@ -1230,7 +1233,14 @@ private fun StepCard(step: RecipeStep) {
             Spacer(modifier = Modifier.height(8.dp))
             Text("${step.checkType.userLabel} · ${step.checkType.label}", color = Ash, fontSize = 12.sp)
             step.inspectionPolicy?.let { policy ->
-                Text("예상 ${formatDuration(policy.maxExpectedSeconds * 1_000L)} · 최초 검사 ${policy.earliestCheckSeconds}초", color = AshDark, fontSize = 11.sp)
+                val expected = "예상 ${formatDuration(policy.maxExpectedSeconds * 1_000L)}"
+                // 자동 검사를 하지 않는 단계에 "최초 검사"를 적으면 검사하는 것처럼 읽힌다.
+                val automatic = step.isAutoCheck && step.checkType != CheckType.TIMER_ONLY
+                Text(
+                    if (automatic) "$expected · 최초 검사 ${policy.earliestCheckSeconds}초" else expected,
+                    color = AshDark,
+                    fontSize = 11.sp
+                )
             }
             step.checkCondition?.let {
                 Text("완료 조건 · $it", color = Ash, fontSize = 11.sp, lineHeight = 17.sp)

@@ -37,7 +37,9 @@
 - push 전 `bash server/check_secrets.sh`
 - `CONTRACT.md`와 코드가 다르면 **코드를 고치거나 불일치를 보고**합니다. 계약을 임의로 수정하지 않습니다
 - **`RecipeFixtures.kt`를 고치면 `AppPersistence.CURRENT_FIXTURE_VERSION`을 함께 +1** 합니다. 안 올리면 기존 설치본은 저장된 옛 레시피를 계속 씁니다 — 빌드도 테스트도 통과해 **증상이 없습니다**
-- 단계 **수**를 바꾼 레시피 변경은 저장된 세션이 `order` 기준으로 어긋납니다. 앱 데이터를 지우고 확인합니다. `InspectionPolicy`의 `earliestCheckSeconds`·`checkIntervalSeconds`는 런타임에 30초로 덮이므로(`withAutomaticInspectionInterval`) `helperText` 문구를 실제와 맞춥니다
+- 단계 **수**를 바꾼 레시피 변경은 저장된 세션이 `order` 기준으로 어긋납니다. 앱 데이터를 지우고 확인합니다
+- `InspectionPolicy`의 `earliestCheckSeconds`·`checkIntervalSeconds`는 런타임에 30초로 덮입니다(`withAutomaticInspectionInterval`). fixture에 적은 값이 그대로 쓰이지 않으니, 실제로 조절되는 `requiredConsecutiveDone`·`burstSeconds`·`maxExpectedSeconds`로 판단하세요
+- 단계 안내를 **손으로 쓴 문자열로 화면에 내보내지 않습니다.** 조리 화면의 "판정 기준" 카드가 `checkCondition`·`checkType`·`InspectionPolicy` 런타임 값에서 문구를 만듭니다 — 그래야 실제 동작과 어긋날 수 없습니다
 - Fake 구현(`FakeWearableCameraGateway` · `FakeJudgmentGateway`)을 실제 구현으로 착각하지 않습니다. 앱은 기본값이 실제 서버 호출입니다(`useMockJudgment = false`)
 - 기능 ID(`F4-3` 등)는 기능명세서에서 확인한 뒤 인용합니다
 

@@ -65,7 +65,7 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 2
+        const val CURRENT_FIXTURE_VERSION = 3
     }
 }
 
@@ -88,9 +88,9 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
                         put("instruction", step.instruction)
                         put("checkType", step.checkType.name)
                         put("checkCondition", step.checkCondition)
+                        put("needsStartImage", step.needsStartImage)
                         put("targetIngredients", JSONArray(step.targetIngredients))
                         put("voicePrompt", step.voicePrompt)
-                        put("helperText", step.helperText)
                         put("isAutoCheck", step.isAutoCheck)
                         step.inspectionPolicy?.let { policy ->
                             put("inspectionPolicy", JSONObject().apply {
@@ -132,16 +132,18 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                     )
                 }
                 val targetsJson = step.getJSONArray("targetIngredients")
+                val checkType = enumValueOf<CheckType>(step.getString("checkType"))
                 add(
                     RecipeStep(
                         order = stepIndex + 1,
                         instruction = step.getString("instruction"),
-                        checkType = enumValueOf(step.getString("checkType")),
+                        checkType = checkType,
                         checkCondition = step.optString("checkCondition").takeIf(String::isNotBlank),
+                        // 이 키가 없는 옛 저장본은 CONTRACT §3.2 v1.2 규칙(COLOR_CHANGE 만 전송)으로 읽는다.
+                        needsStartImage = step.optBoolean("needsStartImage", checkType == CheckType.COLOR_CHANGE),
                         inspectionPolicy = policy,
                         targetIngredients = List(targetsJson.length()) { targetsJson.getString(it) },
                         voicePrompt = step.getString("voicePrompt"),
-                        helperText = step.getString("helperText"),
                         isAutoCheck = step.getBoolean("isAutoCheck")
                     )
                 )

@@ -18,6 +18,7 @@ import com.example.myapplication.judgment.FakeJudgmentGateway
 import com.example.myapplication.judgment.JudgmentOutcome
 import com.example.myapplication.judgment.JudgmentRequest
 import com.example.myapplication.judgment.JudgeApiService
+import com.example.myapplication.judgment.shouldSendStartImage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -724,6 +725,9 @@ class CookingSessionViewModel(
     private fun launchBaselineCapture(step: RecipeStep, cookingSessionId: String) {
         baselineCaptureJob?.cancel()
         baselineCaptureJob = viewModelScope.launch {
+            // 시작 시점 대비 비교를 하는 단계는 기준 사진이 "재료가 팬에 들어간 뒤"여야 한다.
+            // 단계 시작 직후에 찍으면 아직 빈 팬이라 비교 자체가 성립하지 않는다.
+            if (step.shouldSendStartImage()) delay(BASELINE_CAPTURE_DELAY_SECONDS * 1_000L)
             val captured = captureBaseline(step)
             baselineCaptureJob = null
             val current = uiState.value
@@ -1003,6 +1007,7 @@ class CookingSessionViewModel(
                         instruction = step.instruction,
                         checkType = step.checkType,
                         checkCondition = step.checkCondition,
+                        needsStartImage = step.shouldSendStartImage(),
                         elapsedSeconds = state.session?.let {
                             ((System.currentTimeMillis() - it.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
                         } ?: 0,

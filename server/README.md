@@ -164,7 +164,8 @@ Render 무료 티어. **`main`에 push하면 자동 재배포**됩니다(5~10분
 ## 덫
 
 - **레시피를 고치면 `AppPersistence.CURRENT_FIXTURE_VERSION`을 +1.** 안 올리면 기존 설치본에 반영되지 않는데 빌드도 테스트도 통과한다 — 증상이 없다
-- **`InspectionPolicy`의 앞 두 값은 죽은 값** — `withAutomaticInspectionInterval()`이 30초로 덮는다. `helperText` 문구를 실제와 맞출 것
+- **`InspectionPolicy`의 앞 두 값은 죽은 값** — `withAutomaticInspectionInterval()`이 30초로 덮는다. 실제로 조절되는 노브는 `requiredConsecutiveDone`·`burstSeconds`·`maxExpectedSeconds` 셋뿐이다
+- **단계 안내를 손으로 쓴 문자열로 화면에 내보내지 않는다** — 조리 화면의 "판정 기준" 카드가 `checkCondition`·`checkType`·`InspectionPolicy` 런타임 값에서 문구를 만든다. 같은 일을 하던 `helperText` 필드는 화면에 붙은 적이 없어 제거했다
 - **배포본 `DEBUG_MODE`는 시연 전 `false`** — 코드가 아니라 Render 대시보드에서
 - **`eval_history.csv` 최고 기록은 1280px·크롭 없음** — 제품 규격 숫자와 섞어 말하지 않는다
 - **토큰은 `.env`와 Render 대시보드에만.** 2026-08-12에 앱 소스 하드코딩으로 유출돼 교체한 이력이 있다
