@@ -104,12 +104,16 @@ import com.example.myapplication.ui.theme.MyApplicationTheme
 import com.example.myapplication.ui.theme.Pan
 import com.example.myapplication.ui.theme.PanDark
 import com.example.myapplication.ui.theme.Rim
+import com.example.myapplication.voice.VoiceAudioRouter
+import com.example.myapplication.voice.VoiceInputRouteMode
+import com.example.myapplication.voice.VoiceRouteStatus
 import com.example.myapplication.voice.WakeWordController
 import com.example.myapplication.voice.WakeWordStatus
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -145,16 +149,29 @@ private fun TtaraCookApp(
     val wakeControllerHolder = remember { arrayOfNulls<WakeWordController>(1) }
     val speechControllerHolder = remember { arrayOfNulls<SpeechController>(1) }
     var wakeWordStatus by remember { mutableStateOf(WakeWordStatus("음성 호출 준비 전")) }
+    var voiceRouteStatus by remember { mutableStateOf(VoiceRouteStatus()) }
+    val voiceAudioRouter = remember(context) {
+        VoiceAudioRouter(context = context, onStatus = { voiceRouteStatus = it })
+    }
+    DisposableEffect(voiceAudioRouter) {
+        onDispose { voiceAudioRouter.stopVoiceSession() }
+    }
     val speechController = rememberSpeechController(
         context = context,
         onTranscript = sessionViewModel::handleVoiceTranscript,
         onListeningChanged = sessionViewModel::setListening,
         onError = sessionViewModel::onSpeechError,
+        onPrepareListening = voiceAudioRouter::prepareCommandRoute,
         onRecognitionFinished = {
             speechControllerHolder[0]?.recognitionFinished()
         },
         onAudioUseChanged = { active ->
-            if (active) wakeControllerHolder[0]?.pause() else wakeControllerHolder[0]?.resume()
+            if (active) {
+                wakeControllerHolder[0]?.pause()
+            } else {
+                voiceAudioRouter.finishCommand()
+                wakeControllerHolder[0]?.resume()
+            }
         }
     )
     speechControllerHolder[0] = speechController
@@ -162,6 +179,9 @@ private fun TtaraCookApp(
         WakeWordController(
             context = context,
             onWakeWord = {
+                // In fallback mode this opens HFP while "네" is spoken, giving Android enough
+                // time to attach the matching glasses input before command STT starts.
+                voiceAudioRouter.prepareCommandRoute()
                 speechController.speak(
                     message = "네.",
                     onDone = speechController::startListening
@@ -231,12 +251,22 @@ private fun TtaraCookApp(
         voiceScreenActive,
         uiState.audioPermissionGranted,
         appInForeground,
-        wakeWordController
+        wakeWordController,
+        voiceAudioRouter
     ) {
         if (appInForeground && voiceScreenActive && uiState.audioPermissionGranted) {
+            val routeMode = voiceAudioRouter.startVoiceSession()
+            if (routeMode == VoiceInputRouteMode.GLASSES_ALWAYS) {
+                // Give Android's matching Bluetooth input route a short moment to follow the
+                // accepted communication-device request before Vosk opens AudioRecord.
+                delay(350L)
+                voiceAudioRouter.confirmWakeWordRoute()
+            }
             wakeWordController.activate()
         } else {
             wakeWordController.deactivate()
+            speechController.cancelListening()
+            voiceAudioRouter.stopVoiceSession()
         }
     }
 
@@ -302,6 +332,7 @@ private fun TtaraCookApp(
                 AppScreen.S5_COOKING -> CookingScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
+                    voiceRouteStatus = voiceRouteStatus,
                     onStartInspection = sessionViewModel::triggerImmediateInspection,
                     onManualNext = sessionViewModel::continueToNextStep,
                     onNotYet = sessionViewModel::keepCurrentStepAndReschedule,
@@ -329,6 +360,7 @@ private fun TtaraCookApp(
                 AppScreen.S6_STEP_DONE -> StepDoneScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
+                    voiceRouteStatus = voiceRouteStatus,
                     onContinue = sessionViewModel::continueToNextStep,
                     onUndo = sessionViewModel::moveToPreviousStep,
                     onFinishParallelTimer = sessionViewModel::debugFinishParallelTimer,
@@ -340,6 +372,7 @@ private fun TtaraCookApp(
                 AppScreen.S7_NEEDS_VIEW -> NeedsViewScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
+                    voiceRouteStatus = voiceRouteStatus,
                     onRetry = sessionViewModel::triggerImmediateInspection,
                     onNext = sessionViewModel::continueToNextStep
                 )
@@ -347,6 +380,7 @@ private fun TtaraCookApp(
                 AppScreen.S8_MANUAL -> ManualModeScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
+                    voiceRouteStatus = voiceRouteStatus,
                     onResumeAuto = sessionViewModel::resumeAutoMode,
                     onNext = sessionViewModel::continueToNextStep,
                     onRepeat = sessionViewModel::repeatCurrentStep,
@@ -735,6 +769,7 @@ private fun DeviceScreen(
 private fun CookingScreen(
     uiState: CookingSessionUiState,
     wakeWordStatus: WakeWordStatus,
+    voiceRouteStatus: VoiceRouteStatus,
     onStartInspection: () -> Unit,
     onManualNext: () -> Unit,
     onNotYet: () -> Unit,
@@ -819,7 +854,7 @@ private fun CookingScreen(
                 SmallGhostButton("확인해줘", onStartInspection)
                 SmallGhostButton("자동 확인 끄기", onDisableAuto)
             }
-            WakeWordStatusText(wakeWordStatus)
+            WakeWordStatusText(wakeWordStatus, voiceRouteStatus)
             if (uiState.useFakeCamera) {
                 Spacer(modifier = Modifier.height(14.dp))
                 ControlRow("Fake Capture") {
@@ -908,6 +943,7 @@ private fun CookingScreen(
 private fun StepDoneScreen(
     uiState: CookingSessionUiState,
     wakeWordStatus: WakeWordStatus,
+    voiceRouteStatus: VoiceRouteStatus,
     onContinue: () -> Unit,
     onUndo: () -> Unit,
     onFinishParallelTimer: () -> Unit,
@@ -954,7 +990,7 @@ private fun StepDoneScreen(
             GhostButton(label = "이전 단계로 복귀", onClick = onUndo)
             Spacer(modifier = Modifier.height(10.dp))
             VoiceButton(uiState, onVoice)
-            WakeWordStatusText(wakeWordStatus)
+            WakeWordStatusText(wakeWordStatus, voiceRouteStatus)
         }
     }
 }
@@ -963,6 +999,7 @@ private fun StepDoneScreen(
 private fun NeedsViewScreen(
     uiState: CookingSessionUiState,
     wakeWordStatus: WakeWordStatus,
+    voiceRouteStatus: VoiceRouteStatus,
     onRetry: () -> Unit,
     onNext: () -> Unit
 ) {
@@ -987,7 +1024,7 @@ private fun NeedsViewScreen(
             PrimaryButton(label = "즉시 재검사", onClick = onRetry)
             Spacer(modifier = Modifier.height(10.dp))
             GhostButton(label = "수동으로 다음", onClick = onNext)
-            WakeWordStatusText(wakeWordStatus)
+            WakeWordStatusText(wakeWordStatus, voiceRouteStatus)
         }
     }
 }
@@ -996,6 +1033,7 @@ private fun NeedsViewScreen(
 private fun ManualModeScreen(
     uiState: CookingSessionUiState,
     wakeWordStatus: WakeWordStatus,
+    voiceRouteStatus: VoiceRouteStatus,
     onResumeAuto: () -> Unit,
     onNext: () -> Unit,
     onRepeat: () -> Unit,
@@ -1032,7 +1070,7 @@ private fun ManualModeScreen(
             GhostButton(label = "이전 단계", onClick = onPrevious)
             Spacer(modifier = Modifier.height(10.dp))
             VoiceButton(uiState, onVoice)
-            WakeWordStatusText(wakeWordStatus)
+            WakeWordStatusText(wakeWordStatus, voiceRouteStatus)
         }
     }
 }
@@ -1605,8 +1643,19 @@ private fun VoiceButton(uiState: CookingSessionUiState, onClick: () -> Unit) {
 }
 
 @Composable
-private fun WakeWordStatusText(status: WakeWordStatus) {
+private fun WakeWordStatusText(status: WakeWordStatus, routeStatus: VoiceRouteStatus) {
     Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        text = "마이크 경로: ${routeStatus.message}",
+        color = when {
+            routeStatus.error -> Color(0xFFE5C04A)
+            routeStatus.glassesRouteActive -> Herb
+            else -> Ash
+        },
+        fontSize = 12.sp,
+        lineHeight = 18.sp
+    )
+    Spacer(modifier = Modifier.height(4.dp))
     Text(
         text = "음성 호출: ${status.message}",
         color = if (status.error) Color(0xFFE5C04A) else if (status.listening) Herb else Ash,
@@ -1751,6 +1800,7 @@ private class SpeechController(
     private val onTranscript: (String) -> Unit,
     private val onListeningChanged: (Boolean) -> Unit,
     private val onError: (String) -> Unit,
+    private val onPrepareListening: () -> Boolean,
     private val onAudioUseChanged: (Boolean) -> Unit
 ) {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -1823,6 +1873,9 @@ private class SpeechController(
             onError("이 기기에서는 음성 인식을 사용할 수 없습니다.")
             return
         }
+        // Failure to acquire the glasses route is non-fatal: the router reports the fallback and
+        // Android recognition continues with the phone microphone for this command.
+        runCatching(onPrepareListening)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.KOREAN.toLanguageTag())
@@ -1840,6 +1893,14 @@ private class SpeechController(
                 reportAudioUse()
                 onError("음성 인식을 시작하지 못했습니다: ${error.message ?: error.javaClass.simpleName}")
             }
+    }
+
+    fun cancelListening() {
+        runCatching { speechRecognizer?.cancel() }
+        if (!recognitionActive) return
+        recognitionActive = false
+        onListeningChanged(false)
+        reportAudioUse()
     }
 
     fun release() {
@@ -1886,6 +1947,7 @@ private fun rememberSpeechController(
     onTranscript: (String) -> Unit,
     onListeningChanged: (Boolean) -> Unit,
     onError: (String) -> Unit,
+    onPrepareListening: () -> Boolean,
     onRecognitionFinished: () -> Unit,
     onAudioUseChanged: (Boolean) -> Unit
 ): SpeechController {
@@ -1947,6 +2009,7 @@ private fun rememberSpeechController(
             onTranscript = onTranscript,
             onListeningChanged = onListeningChanged,
             onError = onError,
+            onPrepareListening = onPrepareListening,
             onAudioUseChanged = onAudioUseChanged
         )
     }
