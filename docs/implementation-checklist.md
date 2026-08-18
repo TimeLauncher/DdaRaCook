@@ -255,6 +255,7 @@
 
 - [x] `RECORD_AUDIO` 권한 선언과 런타임 요청
 - [x] 폰 `SpeechRecognizer` 기반 한국어 STT
+- [x] 조리 화면에서 Ray-Ban 통신 마이크 우선 사용, 미지원·연결 실패 시 폰 호출어/폰 명령으로 단계적 폴백
 - [x] Android `TextToSpeech` 기반 한국어 TTS
 - [x] `다음` 명령
 - [x] `아직` 명령
