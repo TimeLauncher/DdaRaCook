@@ -6,7 +6,7 @@ object RecipeFixtures {
             Recipe(
                 id = "sausage-vegetable-stir-fry",
                 title = "소세지야채볶음",
-                heroNote = "대표 MVP 레시피 · 쏘야 7단계 자동 확인 데모",
+                heroNote = "대표 MVP 레시피 · 쏘야 5단계 자동 확인 데모",
                 isMvpReady = true,
                 ingredients = listOf(
                     Ingredient("비엔나소세지", "적당량"),
@@ -47,59 +47,36 @@ object RecipeFixtures {
                     // 그 확정 시점이 다음 단계의 기준 사진이 된다 — 15초를 세지 않는다.
                     RecipeStep(
                         order = 3,
-                        instruction = "팬에 기름을 두르고 야채를 넣는다",
+                        instruction = "팬에 기름을 두르고 야채와 소세지를 넣는다.",
                         checkType = CheckType.PRESENCE,
-                        checkCondition = "팬 안에 썬 야채가 들어가 있는가",
+                        checkCondition = "팬 안에 소세지와 썬 야채가 들어있는가",
                         needsStartImage = false,
                         inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 90),
-                        targetIngredients = listOf("양파", "파프리카", "당근", "식용유"),
-                        voicePrompt = "3단계. 팬에 기름을 두르고 썬 야채를 넣으세요.",
+                        targetIngredients = listOf("양파", "파프리카", "당근", "비엔나소세지", "식용유"),
+                        voicePrompt = "3단계. 팬에 기름을 두르고 야채와 소세지를 넣으세요.",
                         isAutoCheck = true
                     ),
                     RecipeStep(
                         order = 4,
-                        instruction = "야채를 중약불로 볶는다",
-                        checkType = CheckType.COLOR_CHANGE,
-                        checkCondition = "시작 시점 사진과 비교해 팬 안의 양파가 조금이라도 더 반투명해졌는가",
+                        instruction = "야채와 소세지를 중약불로 볶는다",
+                        checkType = CheckType.STATE_TRANSITION,
+                        checkCondition = "시작 시점 사진과 비교해 소세지 칼집이 벌어졌는가",
                         needsStartImage = true,
-                        inspectionPolicy = InspectionPolicy(120, 20, 3, 1, 300),
-                        targetIngredients = listOf("양파", "파프리카", "당근"),
-                        voicePrompt = "4단계. 야채를 중약불로 볶으세요.",
+                        inspectionPolicy = InspectionPolicy(120, 20, 3, 1, 240),
+                        targetIngredients = listOf("양파", "파프리카", "당근", "비엔나소세지"),
+                        voicePrompt = "4단계. 야채와 소세지를 중약불로 볶으세요.",
                         isAutoCheck = true,
                         baselineOnStepStart = true
                     ),
                     RecipeStep(
                         order = 5,
-                        instruction = "소세지를 넣는다",
-                        checkType = CheckType.PRESENCE,
-                        checkCondition = "팬 안에 소세지가 들어가 있는가",
-                        needsStartImage = false,
-                        inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 90),
-                        targetIngredients = listOf("비엔나소세지"),
-                        voicePrompt = "5단계. 칼집 낸 소세지를 팬에 넣으세요.",
-                        isAutoCheck = true
-                    ),
-                    RecipeStep(
-                        order = 6,
-                        instruction = "2~3분간 볶는다",
-                        checkType = CheckType.STATE_TRANSITION,
-                        checkCondition = "시작 시점 사진과 비교해 소세지 칼집이 벌어졌는가",
-                        needsStartImage = true,
-                        inspectionPolicy = InspectionPolicy(120, 20, 3, 1, 240),
-                        targetIngredients = listOf("비엔나소세지"),
-                        voicePrompt = "6단계. 2분에서 3분간 볶으세요.",
-                        isAutoCheck = true,
-                        baselineOnStepStart = true
-                    ),
-                    RecipeStep(
-                        order = 7,
                         instruction = "양념장을 넣고 약불로 3분간 볶는다",
                         checkType = CheckType.TIMER_ONLY,
                         checkCondition = null,
                         needsStartImage = false,
                         inspectionPolicy = InspectionPolicy(180, 30, 2, 1, 180),
                         targetIngredients = listOf("양념장"),
-                        voicePrompt = "7단계. 양념장을 넣고 약불에서 3분간 볶되, 연기가 나거나 기포가 심하게 올라오거나 소스가 타 보이면 즉시 불을 약하게 줄이세요.",
+                        voicePrompt = "5단계. 양념장을 넣고 약불에서 3분간 볶되, 연기가 나거나 기포가 심하게 올라오거나 소스가 타 보이면 즉시 불을 약하게 줄이세요.",
                         isAutoCheck = false
                     )
                 )

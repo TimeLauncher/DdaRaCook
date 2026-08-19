@@ -159,7 +159,7 @@ class JudgeApiService(
     }
 
     private fun createRequestJson(request: JudgmentRequest): JSONObject {
-        val currentImage = readImageAsBase64(request.currentImageUri)
+        val currentImage = readImageAsBase64(request.currentImageUri, request.imagePolicy)
         return JSONObject().apply {
             put("requestId", request.requestId)
             put("recipeId", request.recipeId)
@@ -171,15 +171,16 @@ class JudgeApiService(
             if (request.needsStartImage) {
                 put(
                     "startImage",
-                    request.baselineImageUri?.let(::readImageAsBase64) ?: JSONObject.NULL
+                    request.baselineImageUri?.let { readImageAsBase64(it, request.imagePolicy) }
+                        ?: JSONObject.NULL
                 )
             }
             put("currentImage", currentImage)
         }
     }
 
-    private fun readImageAsBase64(uriValue: String): String {
-        val normalized = imageNormalizer.normalize(uriValue)
+    private fun readImageAsBase64(uriValue: String, policy: JudgmentImagePolicy): String {
+        val normalized = imageNormalizer.normalize(uriValue, policy)
         return Base64.encodeToString(normalized.jpegBytes, Base64.NO_WRAP)
     }
 

@@ -14,6 +14,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -59,6 +60,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -129,6 +131,15 @@ private fun TtaraCookApp(
     sessionViewModel: CookingSessionViewModel = viewModel()
 ) {
     val uiState by sessionViewModel.uiState.collectAsStateWithLifecycle()
+    BackHandler(enabled = uiState.currentScreen in setOf(AppScreen.S2_RECIPE_DETAIL, AppScreen.S4_DEVICE, AppScreen.S5_COOKING, AppScreen.S8_MANUAL)) {
+        when (uiState.currentScreen) {
+            AppScreen.S2_RECIPE_DETAIL -> sessionViewModel.backToHome()
+            AppScreen.S4_DEVICE -> sessionViewModel.backFromDevicePreparation()
+            AppScreen.S5_COOKING,
+            AppScreen.S8_MANUAL -> sessionViewModel.moveToPreviousStep()
+            else -> Unit
+        }
+    }
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var appInForeground by remember { mutableStateOf(false) }
@@ -208,6 +219,32 @@ private fun TtaraCookApp(
         contract = DatCameraPermissionContract(),
         onResult = sessionViewModel::onWearableCameraPermissionResult
     )
+    val galleryBaselineLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            sessionViewModel.setGalleryBaselineImage(it.toString())
+        }
+    }
+    val galleryCurrentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            sessionViewModel.judgeGalleryImage(it.toString())
+        }
+    }
 
     LaunchedEffect(uiState.currentScreen, uiState.useFakeCamera) {
         if (!uiState.useFakeCamera && uiState.currentScreen == AppScreen.S4_DEVICE) {
@@ -260,29 +297,31 @@ private fun TtaraCookApp(
                 .padding(innerPadding),
             color = Ink
         ) {
-            when (uiState.currentScreen) {
-                AppScreen.S1_HOME -> HomeScreen(
+            key(uiState.currentScreen) {
+                when (uiState.currentScreen) {
+                AppScreen.S1_HOME -> FigmaHomeScreen(
                     uiState = uiState,
                     onRecipeClick = sessionViewModel::selectRecipe,
                     onAddRecipe = { sessionViewModel.openRecipeEditor() },
                     onResume = sessionViewModel::resumeSavedSession
                 )
 
-                AppScreen.S2_RECIPE_DETAIL -> RecipeDetailScreen(
+                AppScreen.S2_RECIPE_DETAIL -> FigmaRecipeDetailScreen(
                     recipe = uiState.selectedRecipe ?: return@Surface,
                     onBack = sessionViewModel::backToHome,
                     onStart = sessionViewModel::openDevicePreparation,
                     onEdit = { sessionViewModel.openRecipeEditor(uiState.selectedRecipeId) }
                 )
 
-                AppScreen.S3_RECIPE_EDITOR -> RecipeEditorScreen(
+                AppScreen.S3_RECIPE_EDITOR -> FigmaRecipeEditorScreen(
                     existing = uiState.selectedRecipe,
                     onCancel = sessionViewModel::cancelRecipeEditor,
                     onSave = sessionViewModel::saveRecipe
                 )
 
-                AppScreen.S4_DEVICE -> DeviceScreen(
+                AppScreen.S4_DEVICE -> FigmaDeviceScreen(
                     uiState = uiState,
+                    onBack = sessionViewModel::backFromDevicePreparation,
                     onAdvance = {
                         if (
                             !uiState.useFakeCamera &&
@@ -299,11 +338,14 @@ private fun TtaraCookApp(
                     onStartCooking = sessionViewModel::startCooking
                 )
 
-                AppScreen.S5_COOKING -> CookingScreen(
+                AppScreen.S5_COOKING -> FigmaCookingScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
                     onStartInspection = sessionViewModel::triggerImmediateInspection,
-                    onManualNext = sessionViewModel::continueToNextStep,
+                    onManualNext = {
+                        speechController.stopSpeaking()
+                        sessionViewModel.continueAutoButtonToNextStep()
+                    },
                     onNotYet = sessionViewModel::keepCurrentStepAndReschedule,
                     onRepeat = sessionViewModel::repeatCurrentStep,
                     onPrevious = sessionViewModel::moveToPreviousStep,
@@ -326,7 +368,7 @@ private fun TtaraCookApp(
                     }
                 )
 
-                AppScreen.S6_STEP_DONE -> StepDoneScreen(
+                AppScreen.S6_STEP_DONE -> FigmaStepDoneScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
                     onContinue = sessionViewModel::continueToNextStep,
@@ -337,18 +379,21 @@ private fun TtaraCookApp(
                     }
                 )
 
-                AppScreen.S7_NEEDS_VIEW -> NeedsViewScreen(
+                AppScreen.S7_NEEDS_VIEW -> FigmaNeedsViewScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
                     onRetry = sessionViewModel::triggerImmediateInspection,
                     onNext = sessionViewModel::continueToNextStep
                 )
 
-                AppScreen.S8_MANUAL -> ManualModeScreen(
+                AppScreen.S8_MANUAL -> FigmaManualModeScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
                     onResumeAuto = sessionViewModel::resumeAutoMode,
-                    onNext = sessionViewModel::continueToNextStep,
+                    onPickGalleryBaseline = { galleryBaselineLauncher.launch(arrayOf("image/*")) },
+                    onPickGalleryCurrent = { galleryCurrentLauncher.launch(arrayOf("image/*")) },
+                    onRetryJudgment = sessionViewModel::retryLastManualJudgment,
+                    onNext = sessionViewModel::continueManualButtonToNextStep,
                     onRepeat = sessionViewModel::repeatCurrentStep,
                     onPrevious = sessionViewModel::moveToPreviousStep,
                     onVoice = {
@@ -356,12 +401,13 @@ private fun TtaraCookApp(
                     }
                 )
 
-                AppScreen.S9_SUMMARY -> SummaryScreen(
-                    uiState = uiState,
-                    onDone = sessionViewModel::backToHome,
-                    onDeleteImages = sessionViewModel::deleteSessionImages,
-                    onGroundTruth = sessionViewModel::recordGroundTruth
-                )
+                    AppScreen.S9_SUMMARY -> FigmaSummaryScreen(
+                        uiState = uiState,
+                        onDone = sessionViewModel::backToHome,
+                        onDeleteImages = sessionViewModel::deleteSessionImages,
+                        onGroundTruth = sessionViewModel::recordGroundTruth
+                    )
+                }
             }
         }
     }
@@ -1840,6 +1886,17 @@ private class SpeechController(
                 reportAudioUse()
                 onError("음성 인식을 시작하지 못했습니다: ${error.message ?: error.javaClass.simpleName}")
             }
+    }
+
+    fun stopSpeaking() {
+        activeUtteranceId?.let { utteranceId ->
+            startCallbacks.remove(utteranceId)
+            completionCallbacks.remove(utteranceId)
+        }
+        activeUtteranceId = null
+        runCatching { textToSpeech?.stop() }
+        ttsActive = false
+        reportAudioUse()
     }
 
     fun release() {

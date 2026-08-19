@@ -5,6 +5,14 @@ import com.example.myapplication.ReasonCode
 import com.example.myapplication.JudgmentVerdict
 import kotlinx.coroutines.flow.StateFlow
 
+enum class JudgmentImagePolicy {
+    /** 자동 카메라: 상단 40%를 제거한 뒤 긴 변을 최대 1024px로 축소한다. */
+    AUTOMATIC_CAMERA,
+
+    /** 수동 모드: 크롭 없이 긴 변만 최대 1024px로 축소한다. */
+    MANUAL_MODE
+}
+
 data class JudgmentRequest(
     val requestId: String,
     val cookingSessionId: String,
@@ -18,6 +26,7 @@ data class JudgmentRequest(
     val elapsedSeconds: Int,
     val baselineImageUri: String?,
     val currentImageUri: String,
+    val imagePolicy: JudgmentImagePolicy = JudgmentImagePolicy.AUTOMATIC_CAMERA,
     val requestedAtMs: Long = System.currentTimeMillis()
 )
 

@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.net.Uri
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.myapplication.judgment.ImageNormalizer
+import com.example.myapplication.judgment.JudgmentImagePolicy
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -40,6 +41,43 @@ class ImageNormalizerInstrumentedTest {
             try {
                 val center = decoded.getPixel(decoded.width / 2, decoded.height / 2)
                 assertTrue(Color.blue(center) > Color.red(center))
+            } finally {
+                decoded.recycle()
+            }
+        } finally {
+            input.delete()
+        }
+    }
+
+    @Test
+    fun manualModeDoesNotCropAndOnlyScalesLongEdgeToJpeg() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val input = File(context.cacheDir, "manual-normalizer-${System.nanoTime()}.png")
+        val bitmap = Bitmap.createBitmap(1200, 1600, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(Color.BLUE)
+        Canvas(bitmap).drawRect(0f, 0f, 1200f, 640f, Paint().apply { color = Color.RED })
+        input.outputStream().use { output ->
+            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+
+        try {
+            val normalized = ImageNormalizer(context).normalize(
+                Uri.fromFile(input).toString(),
+                JudgmentImagePolicy.MANUAL_MODE
+            )
+
+            assertEquals(768, normalized.width)
+            assertEquals(1024, normalized.height)
+            assertTrue(normalized.jpegBytes.size > 2)
+            assertEquals(0xFF, normalized.jpegBytes[0].toInt() and 0xFF)
+            assertEquals(0xD8, normalized.jpegBytes[1].toInt() and 0xFF)
+            val decoded = requireNotNull(
+                BitmapFactory.decodeByteArray(normalized.jpegBytes, 0, normalized.jpegBytes.size)
+            )
+            try {
+                val top = decoded.getPixel(decoded.width / 2, decoded.height / 10)
+                assertTrue(Color.red(top) > Color.blue(top))
             } finally {
                 decoded.recycle()
             }
