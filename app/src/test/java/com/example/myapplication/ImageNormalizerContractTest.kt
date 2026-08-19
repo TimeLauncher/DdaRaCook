@@ -32,6 +32,14 @@ class ImageNormalizerContractTest {
     }
 
     @Test
+    fun uncroppedManualPortraitScalesTo1024LongEdge() {
+        val output = scaledDimensions(width = 3024, height = 4032)
+
+        assertEquals(768, output.width)
+        assertEquals(1024, output.height)
+    }
+
+    @Test
     fun onePixelHeightStillProducesValidBottomCrop() {
         val crop = bottomCropBounds(width = 10, height = 1)
 

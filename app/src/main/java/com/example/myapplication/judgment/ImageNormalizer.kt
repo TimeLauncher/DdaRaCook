@@ -3,7 +3,9 @@ package com.example.myapplication.judgment
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ColorSpace
 import android.graphics.Matrix
+import android.os.Build
 import android.media.ExifInterface
 import android.net.Uri
 import java.io.ByteArrayOutputStream
@@ -19,20 +21,31 @@ data class NormalizedImage(
     val originalByteSize: Int,
     val originalOrientation: Int,
     val sha256: String,
-    val pipelineVersion: String = PIPELINE_VERSION
+    val pipelineVersion: String
 )
 
 class ImageNormalizer(private val context: Context) {
-    fun normalize(uriValue: String): NormalizedImage {
+    fun normalize(
+        uriValue: String,
+        policy: JudgmentImagePolicy = JudgmentImagePolicy.AUTOMATIC_CAMERA
+    ): NormalizedImage {
         val original = open(uriValue).use(InputStream::readBytes)
         val orientation = runCatching {
             open(uriValue).use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
         }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-        val decoded = requireNotNull(BitmapFactory.decodeByteArray(original, 0, original.size)) {
+        val decodeOptions = BitmapFactory.Options().apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
+            }
+        }
+        val decoded = requireNotNull(BitmapFactory.decodeByteArray(original, 0, original.size, decodeOptions)) {
             "판정 이미지를 디코딩할 수 없습니다."
         }
         val oriented = decoded.applyOrientation(orientation)
-        val cropped = oriented.keepBottomPercent(BOTTOM_KEEP_PERCENT)
+        val cropped = when (policy) {
+            JudgmentImagePolicy.AUTOMATIC_CAMERA -> oriented.keepBottomPercent(BOTTOM_KEEP_PERCENT)
+            JudgmentImagePolicy.MANUAL_MODE -> oriented
+        }
         val scaled = cropped.scaleToMaxLongEdge(MAX_SERVER_LONG_EDGE)
         val output = ByteArrayOutputStream()
         check(scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) { "JPEG 정규화에 실패했습니다." }
@@ -49,7 +62,8 @@ class ImageNormalizer(private val context: Context) {
             height = outputHeight,
             originalByteSize = original.size,
             originalOrientation = orientation,
-            sha256 = bytes.sha256()
+            sha256 = bytes.sha256(),
+            pipelineVersion = policy.pipelineVersion
         )
     }
 
@@ -67,6 +81,12 @@ class ImageNormalizer(private val context: Context) {
         const val JPEG_QUALITY = 80
     }
 }
+
+private val JudgmentImagePolicy.pipelineVersion: String
+    get() = when (this) {
+        JudgmentImagePolicy.AUTOMATIC_CAMERA -> AUTOMATIC_CAMERA_PIPELINE_VERSION
+        JudgmentImagePolicy.MANUAL_MODE -> MANUAL_MODE_PIPELINE_VERSION
+    }
 
 private fun Bitmap.applyOrientation(orientation: Int): Bitmap {
     val matrix = Matrix().apply {
@@ -147,4 +167,5 @@ private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(this)
     .joinToString("") { "%02x".format(it) }
 
-const val PIPELINE_VERSION = "bottom60-long1024-jpeg80-exif-baked-v3"
+const val AUTOMATIC_CAMERA_PIPELINE_VERSION = "bottom60-long1024-jpeg80-exif-baked-srgb-v4"
+const val MANUAL_MODE_PIPELINE_VERSION = "no-crop-long1024-jpeg80-exif-baked-srgb-v1"

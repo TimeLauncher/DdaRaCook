@@ -14,6 +14,9 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
             val builtInIds = fallback.mapTo(mutableSetOf(), Recipe::id)
             val migrated = fallback + stored.filterNot { it.id in builtInIds }
             saveRecipes(migrated)
+            // 내장 레시피의 단계 수나 의미가 바뀌면 이전 인덱스·기준 사진을 새 단계에
+            // 이어 붙일 수 없다. 사용자 레시피와 설정은 보존하고 진행 중 세션만 종료한다.
+            saveSession(null)
             migrated
         } else {
             stored.ifEmpty { fallback }
@@ -65,7 +68,7 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 8
+        const val CURRENT_FIXTURE_VERSION = 9
     }
 }
 

@@ -93,13 +93,22 @@ class AppPersistenceInstrumentedTest {
         val fixtures = RecipeFixtures.sampleRecipes()
         val custom = fixtures.first().copy(id = "custom-recipe", title = "내 레시피", isMvpReady = false)
         persistence.saveRecipes(listOf(fixtures.first { it.id == "doenjang" }, custom))
+        persistence.saveSession(
+            CookingSession(
+                id = "old-seven-step-session",
+                recipeId = "sausage-vegetable-stir-fry",
+                currentStepIndex = 5
+            )
+        )
         context.getSharedPreferences("persistence-test", android.content.Context.MODE_PRIVATE)
             .edit().putInt("recipe_fixture_version", 1).commit()
 
         val migrated = persistence.loadRecipes(fixtures)
 
         assertEquals("sausage-vegetable-stir-fry", migrated.first().id)
+        assertEquals(5, migrated.first().steps.size)
         assertEquals(false, migrated.first { it.id == "doenjang" }.isMvpReady)
         assertNotNull(migrated.firstOrNull { it.id == "custom-recipe" })
+        assertEquals(null, persistence.loadSession())
     }
 }

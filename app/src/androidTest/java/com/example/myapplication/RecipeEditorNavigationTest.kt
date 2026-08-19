@@ -22,9 +22,9 @@ class RecipeEditorNavigationTest {
     fun homeOpensRecipeEditor() {
         composeRule.onNodeWithText("내 레시피").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("소세지야채볶음 대표 이미지").fetchSemanticsNode()
-        composeRule.onNodeWithText("레시피 추가").assertHeightIsAtLeast(48.dp)
-        composeRule.onNodeWithText("레시피 추가").performClick()
+        composeRule.onNodeWithText("추가").assertHeightIsAtLeast(48.dp)
+        composeRule.onNodeWithText("추가").performClick()
         composeRule.onNodeWithText("레시피 제목").fetchSemanticsNode()
-        assertTrue(composeRule.onAllNodesWithText("단계 추가").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(composeRule.onAllNodesWithText("요리 단계").fetchSemanticsNodes().isNotEmpty())
     }
 }

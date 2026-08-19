@@ -50,26 +50,30 @@ class FakeJudgmentGatewayTest {
         assertEquals("sausage-vegetable-stir-fry", recipes.first().id)
         assertTrue(recipes.first().isMvpReady)
         assertEquals("소세지야채볶음", recipes.first().title)
-        assertEquals(7, recipes.first().steps.size)
+        assertEquals(5, recipes.first().steps.size)
         assertTrue(recipes.first().steps[1].checkType == CheckType.TIMER_ONLY)
         assertTrue(recipes.first().steps[1].inspectionPolicy == null)
-        assertTrue(recipes.first().steps[6].checkType == CheckType.TIMER_ONLY)
-        assertTrue(recipes.first().steps[6].inspectionPolicy?.maxExpectedSeconds == 180)
+        assertTrue(recipes.first().steps[4].checkType == CheckType.TIMER_ONLY)
+        assertTrue(recipes.first().steps[4].inspectionPolicy?.maxExpectedSeconds == 180)
 
-        // 3·5단계는 재료 투입을 A등급 존재 판정으로 확정한다. 그 시점이 다음 단계의 기준 사진이다.
+        // 3단계에서 야채와 소세지 투입을 확인하고, 그 시점이 다음 비교 단계의 기준 사진이 된다.
         assertEquals(
-            listOf(3, 5),
+            listOf(3),
             recipes.first().steps.filter { it.checkType == CheckType.PRESENCE }.map { it.order }
         )
         assertEquals(
-            listOf(4, 6),
+            listOf(4),
             recipes.first().steps.filter { it.baselineOnStepStart }.map { it.order }
         )
 
-        // 1단계와 6단계는 같은 STATE_TRANSITION 이지만 시작 이미지 정책이 반대다.
-        // 1단계는 "덩어리가 없는가"(절대), 6단계는 "시작 시점 사진과 비교해"(상대) — CONTRACT §3.2
+        // 1단계와 4단계는 같은 STATE_TRANSITION 이지만 시작 이미지 정책이 반대다.
+        // 1단계는 "덩어리가 없는가"(절대), 4단계는 "시작 시점 사진과 비교해"(상대) — CONTRACT §3.2
         assertTrue(!recipes.first().steps[0].needsStartImage)
-        assertTrue(recipes.first().steps[5].needsStartImage)
+        assertTrue(recipes.first().steps[3].needsStartImage)
+        assertEquals("팬에 기름을 두르고 야채와 소세지를 넣는다.", recipes.first().steps[2].instruction)
+        assertEquals("팬 안에 소세지와 썬 야채가 들어있는가", recipes.first().steps[2].checkCondition)
+        assertEquals("야채와 소세지를 중약불로 볶는다", recipes.first().steps[3].instruction)
+        assertEquals("시작 시점 사진과 비교해 소세지 칼집이 벌어졌는가", recipes.first().steps[3].checkCondition)
         assertTrue(recipes.first().steps.all { limitAnnouncement(it.voicePrompt).split(Regex("(?<=[.!?。！？])\\s+")).size <= 2 })
 
         val staticSample = recipes.first { it.id == "doenjang" }

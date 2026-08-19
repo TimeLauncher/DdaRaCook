@@ -41,6 +41,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,7 +63,10 @@ class DatWearableCameraGateway(
 ) : WearableCameraGateway {
     companion object {
         private const val TAG = "DatCameraGateway"
-        private const val FRAME_RATE = 24
+        private const val FRAME_RATE = 2
+        private const val STREAM_WARMUP_TIMEOUT_MS = 2_000L
+        private const val PHOTO_CAPTURE_RETRY_DELAY_MS = 1_000L
+        private const val PHOTO_CAPTURE_MAX_ATTEMPTS = 2
         private const val CLEANUP_TIMEOUT_MS = 5_000L
     }
 
@@ -307,9 +311,8 @@ class DatWearableCameraGateway(
                 var addFailure: String? = null
                 currentSession.addCamera(
                     StreamConfiguration(
-                        videoQuality = VideoQuality.MEDIUM,
-                        frameRate = FRAME_RATE,
-                        compressVideo = true
+                        videoQuality = VideoQuality.HIGH,
+                        frameRate = FRAME_RATE
                     )
                 ).onSuccess { camera = it }
                     .onFailure { error, _ -> addFailure = error.description }
@@ -327,6 +330,7 @@ class DatWearableCameraGateway(
                 val attachedStream = attachedCamera.stream
                 stream = attachedStream
                 val firstFrameSignal = CompletableDeferred<Long>()
+                val streamingSignal = CompletableDeferred<Unit>()
                 val errorSignal = CompletableDeferred<String>()
                 terminalSignal = CompletableDeferred()
 
@@ -340,6 +344,9 @@ class DatWearableCameraGateway(
                 streamStateJob = launch(start = CoroutineStart.UNDISPATCHED) {
                     attachedStream.state.collect { value ->
                         Log.i(TAG, "requestId=${request.requestId} streamState=$value")
+                        if (value == StreamState.STREAMING && !streamingSignal.isCompleted) {
+                            streamingSignal.complete(Unit)
+                        }
                         if (
                             (value == StreamState.STOPPED || value == StreamState.CLOSED) &&
                             terminalSignal?.isCompleted == false
@@ -369,7 +376,7 @@ class DatWearableCameraGateway(
                     val readiness = try {
                         withTimeout(request.streamTimeoutMs) {
                             select<StreamReadiness> {
-                                firstFrameSignal.onAwait { StreamReadiness.Ready(it) }
+                                streamingSignal.onAwait { StreamReadiness.Ready }
                                 errorSignal.onAwait { StreamReadiness.Failed(it) }
                             }
                         }
@@ -377,11 +384,24 @@ class DatWearableCameraGateway(
                         StreamReadiness.TimedOut
                     }
                     when (readiness) {
-                        is StreamReadiness.Ready -> {
-                            firstFrameAt = readiness.elapsedRealtimeMs
+                        StreamReadiness.Ready -> {
+                            // DAT defines STREAMING as the point where frames are flowing. Photo
+                            // capture is valid in this state. Give the decoded frame collector a
+                            // short warm-up window so capturePhoto() does not race stream startup.
+                            firstFrameAt = try {
+                                withTimeout(STREAM_WARMUP_TIMEOUT_MS) {
+                                    firstFrameSignal.await()
+                                }
+                            } catch (_: TimeoutCancellationException) {
+                                null
+                            }
                             mutableState.value = WearableCameraState.Capturing
                             val capturedAtEpochMs = System.currentTimeMillis()
-                            val photoResult = capturePhoto(attachedStream, request.captureTimeoutMs)
+                            val photoResult = capturePhotoWithRetry(
+                                stream = attachedStream,
+                                timeoutMs = request.captureTimeoutMs,
+                                requestId = request.requestId
+                            )
                             when (photoResult) {
                                 is PhotoCaptureResult.Failure -> {
                                     if (photoResult.timedOut) {
@@ -449,7 +469,8 @@ class DatWearableCameraGateway(
                             )
                         }
                         StreamReadiness.TimedOut -> {
-                            val timeoutMessage = "No first frame within ${request.streamTimeoutMs}ms"
+                            val timeoutMessage =
+                                "Stream did not reach STREAMING within ${request.streamTimeoutMs}ms"
                             outcome = failure(
                                 request,
                                 CaptureFailureKind.STREAM_TIMEOUT,
@@ -525,6 +546,36 @@ class DatWearableCameraGateway(
         }
     } catch (_: TimeoutCancellationException) {
         PhotoCaptureResult.Failure("Photo capture exceeded ${timeoutMs}ms", timedOut = true)
+    }
+
+    private suspend fun capturePhotoWithRetry(
+        stream: Stream,
+        timeoutMs: Long,
+        requestId: String
+    ): PhotoCaptureResult {
+        var lastFailure: PhotoCaptureResult.Failure? = null
+        repeat(PHOTO_CAPTURE_MAX_ATTEMPTS) { attemptIndex ->
+            when (val result = capturePhoto(stream, timeoutMs)) {
+                is PhotoCaptureResult.Success -> return result
+                is PhotoCaptureResult.Failure -> {
+                    lastFailure = result
+                    Log.w(
+                        TAG,
+                        "requestId=$requestId capturePhoto attempt=${attemptIndex + 1} " +
+                            "failed=${result.message}"
+                    )
+                    if (
+                        result.timedOut ||
+                        attemptIndex + 1 >= PHOTO_CAPTURE_MAX_ATTEMPTS ||
+                        stream.state.value != StreamState.STREAMING
+                    ) {
+                        return result
+                    }
+                    delay(PHOTO_CAPTURE_RETRY_DELAY_MS)
+                }
+            }
+        }
+        return checkNotNull(lastFailure)
     }
 
     private suspend fun cleanupCamera(
@@ -671,7 +722,7 @@ class DatWearableCameraGateway(
     }
 
     private sealed interface StreamReadiness {
-        data class Ready(val elapsedRealtimeMs: Long) : StreamReadiness
+        data object Ready : StreamReadiness
         data class Failed(val message: String) : StreamReadiness
         data object TimedOut : StreamReadiness
     }

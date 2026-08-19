@@ -1,6 +1,8 @@
 package com.example.myapplication
 
 import com.example.myapplication.judgment.JudgmentResult
+import com.example.myapplication.camera.CapturePurpose
+import com.example.myapplication.camera.CaptureRequest
 import com.example.myapplication.ui.theme.Flame
 import com.example.myapplication.ui.theme.Herb
 import com.example.myapplication.ui.theme.Rim
@@ -156,6 +158,31 @@ class CookingDomainTest {
     }
 
     @Test
+    fun staleCaptureCannotOverwriteStepAfterNextButton() {
+        val request = CaptureRequest(
+            requestId = "capture-1",
+            cookingSessionId = "session",
+            stepOrder = 3,
+            purpose = CapturePurpose.INSPECTION
+        )
+        val active = CookingSession(
+            id = "session",
+            recipeId = "recipe",
+            currentStepIndex = 2,
+            activeRequestId = request.requestId
+        )
+
+        assertTrue(isCurrentCaptureRequest(active, 3, request))
+        assertFalse(
+            isCurrentCaptureRequest(
+                active.copy(currentStepIndex = 3, activeRequestId = null),
+                4,
+                request
+            )
+        )
+    }
+
+    @Test
     fun announcementIsLimitedToTwoSentences() {
         assertEquals("첫 문장입니다. 두 번째 문장입니다.", limitAnnouncement("첫 문장입니다. 두 번째 문장입니다. 세 번째 문장입니다."))
     }
@@ -176,6 +203,88 @@ class CookingDomainTest {
     fun cannotTellTransitionsToManualOnlyOnThirdJudgment() {
         assertEquals(CookingPhase.NEEDS_VIEW to AppScreen.S7_NEEDS_VIEW, cannotTellDestination(2))
         assertEquals(CookingPhase.MANUAL_MODE to AppScreen.S8_MANUAL, cannotTellDestination(3))
+    }
+
+    @Test
+    fun galleryJudgmentRequiresPhotoStepAndComparisonBaseline() {
+        val steps = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+            .associateBy(RecipeStep::order)
+
+        assertEquals(null, galleryJudgmentValidationError(requireNotNull(steps[1]), hasBaselineImage = false))
+        assertTrue(galleryJudgmentValidationError(requireNotNull(steps[2]), hasBaselineImage = false) != null)
+        assertTrue(galleryJudgmentValidationError(requireNotNull(steps[4]), hasBaselineImage = false) != null)
+        assertEquals(null, galleryJudgmentValidationError(requireNotNull(steps[4]), hasBaselineImage = true))
+    }
+
+    @Test
+    fun manualStepThreeDonePhotoBecomesStepFourBaseline() {
+        val recipe = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+        val galleryUri = "content://gallery/sausage-step-3"
+        val session = CookingSession(
+            id = "session",
+            recipeId = recipe.id,
+            mode = SessionMode.MANUAL_ONLY,
+            currentStepIndex = 2,
+            lastCaptureUriByStep = mapOf(3 to galleryUri)
+        )
+
+        assertEquals(
+            4 to galleryUri,
+            doneBaselineTarget(recipe, session, 3, JudgmentVerdict.DONE)
+        )
+        assertEquals(
+            null,
+            doneBaselineTarget(recipe, session, 3, JudgmentVerdict.NOT_DONE)
+        )
+    }
+
+    @Test
+    fun automaticStepFourReusesCarriedStepThreePhotoWithoutNewBaselineCapture() {
+        val stepFour = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+            .first { it.order == 4 }
+        val session = CookingSession(
+            id = "session",
+            recipeId = "sausage-vegetable-stir-fry",
+            baselineUriByStep = mapOf(4 to "content://capture/step-3-done")
+        )
+
+        assertTrue(hasReusableStartImage(stepFour, session))
+        assertFalse(hasReusableStartImage(stepFour, session.copy(baselineUriByStep = emptyMap())))
+    }
+
+    @Test
+    fun onlyDoneVerdictIsEligibleForManualAutoAdvance() {
+        assertTrue(shouldAutoAdvanceManualVerdict(JudgmentVerdict.DONE))
+        assertFalse(shouldAutoAdvanceManualVerdict(JudgmentVerdict.NOT_DONE))
+        assertFalse(shouldAutoAdvanceManualVerdict(JudgmentVerdict.CANNOT_TELL))
+    }
+
+    @Test
+    fun automaticNextButtonCanAdvanceWhileStepIsStarting() {
+        assertFalse(
+            blocksNextStepDuringStart(
+                phase = CookingPhase.STEP_STARTING,
+                allowDuringStepStarting = true
+            )
+        )
+        assertTrue(
+            blocksNextStepDuringStart(
+                phase = CookingPhase.STEP_STARTING,
+                allowDuringStepStarting = false
+            )
+        )
+    }
+
+    @Test
+    fun galleryUriKeepsOriginalDisplayWhileAppCaptureUsesServerPreview() {
+        assertTrue(isExternalGalleryImageUri("content://com.android.providers.media.documents/document/image%3A1"))
+        assertFalse(isExternalGalleryImageUri("content://com.example.myapplication.fileprovider/shared_images/capture.png"))
+        assertFalse(isExternalGalleryImageUri("file:///data/user/0/com.example.myapplication/cache/capture.png"))
     }
 
     @Test

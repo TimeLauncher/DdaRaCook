@@ -15,11 +15,14 @@ import com.example.myapplication.camera.WearableCameraGateway
 import com.example.myapplication.camera.WearableCameraState
 import com.example.myapplication.judgment.FakeJudgmentBehavior
 import com.example.myapplication.judgment.FakeJudgmentGateway
+import com.example.myapplication.judgment.ImageNormalizer
+import com.example.myapplication.judgment.JudgmentImagePolicy
 import com.example.myapplication.judgment.JudgmentOutcome
 import com.example.myapplication.judgment.JudgmentRequest
 import com.example.myapplication.judgment.JudgeApiService
 import com.example.myapplication.judgment.shouldSendStartImage
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +32,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 private const val AUTO_ADVANCE_DELAY_MS = 2_000L
@@ -36,6 +40,8 @@ private const val MAX_CONSECUTIVE_CAMERA_TIMEOUTS = 2
 private const val REQUIRED_CAPTURE_MAX_ATTEMPTS = 3
 private const val REQUIRED_CAPTURE_RETRY_DELAY_MS = 3_000L
 private const val NEXT_COMMAND_DEBOUNCE_MS = 3_000L
+private const val CAMERA_STREAM_READY_TIMEOUT_MS = 12_000L
+private const val CAMERA_PHOTO_CAPTURE_TIMEOUT_MS = 20_000L
 
 class CookingSessionViewModel(
     application: Application
@@ -218,6 +224,25 @@ class CookingSessionViewModel(
         cancelInspectionWork()
         persistence.saveSession(null)
         mutableUiState.update { it.copy(currentScreen = AppScreen.S1_HOME, session = null, hasResumableSession = false, nextInspectionInSeconds = null) }
+    }
+
+    fun backFromDevicePreparation() {
+        cancelInspectionWork()
+        elapsedTickerJob?.cancel()
+        elapsedTickerJob = null
+        pendingManualInspectionStepOrder = null
+        mutableUiState.update { state ->
+            val keepCookingSession = state.resumeAutoAfterDeviceSetup && state.session != null
+            state.copy(
+                currentScreen = AppScreen.S2_RECIPE_DETAIL,
+                session = if (keepCookingSession) state.session?.copy(activeRequestId = null) else null,
+                hasResumableSession = keepCookingSession,
+                resumeAutoAfterDeviceSetup = false,
+                currentCaptureOutcome = null,
+                judgeError = null,
+                nextInspectionInSeconds = null
+            )
+        }
     }
 
     fun openDevicePreparation() {
@@ -412,6 +437,115 @@ class CookingSessionViewModel(
         }
     }
 
+    fun setGalleryBaselineImage(uriValue: String) {
+        val state = uiState.value
+        val session = state.session ?: return
+        val step = state.currentStep ?: return
+        if (session.mode != SessionMode.MANUAL_ONLY || !step.shouldSendStartImage()) return
+        viewModelScope.launch {
+            val errorMessage = withContext(Dispatchers.IO) {
+                runCatching {
+                    ImageNormalizer(getApplication()).normalize(
+                        uriValue,
+                        JudgmentImagePolicy.MANUAL_MODE
+                    )
+                }
+                    .exceptionOrNull()
+                    ?.message
+            }
+            val current = uiState.value
+            val currentSession = current.session
+            if (currentSession?.id != session.id || current.currentStep?.order != step.order) return@launch
+            if (errorMessage != null) {
+                mutableUiState.update { it.copy(judgeError = "시작 사진을 불러올 수 없습니다: $errorMessage") }
+                announceCurrent("비교 시작 사진을 불러오지 못했습니다. 다른 사진을 선택해주세요.")
+                return@launch
+            }
+            mutableUiState.update {
+                val active = it.session ?: return@update it
+                it.copy(
+                    judgeError = null,
+                    session = active.copy(
+                        baselineUriByStep = active.baselineUriByStep + (step.order to uriValue),
+                        currentVerdict = null
+                    )
+                )
+            }
+            announceCurrent("비교 시작 사진을 준비했습니다. 이제 현재 사진을 선택해 판정해주세요.")
+        }
+    }
+
+    fun judgeGalleryImage(uriValue: String) {
+        val state = uiState.value
+        val session = state.session ?: return
+        val recipe = state.selectedRecipe ?: return
+        val step = state.currentStep ?: return
+        if (session.mode != SessionMode.MANUAL_ONLY) return
+        val validationError = galleryJudgmentValidationError(
+            step = step,
+            hasBaselineImage = session.baselineUriByStep[step.order] != null
+        )
+        if (validationError != null) {
+            mutableUiState.update { it.copy(judgeError = validationError) }
+            announceCurrent(validationError)
+            return
+        }
+
+        cancelInspectionWork()
+        val requestId = UUID.randomUUID().toString()
+        mutableUiState.update {
+            val active = it.session ?: return@update it
+            it.copy(
+                currentScreen = AppScreen.S8_MANUAL,
+                judgingInFlight = true,
+                judgeError = null,
+                session = active.copy(
+                    phase = CookingPhase.JUDGING,
+                    activeRequestId = requestId,
+                    currentVerdict = null,
+                    lastCaptureUriByStep = active.lastCaptureUriByStep + (step.order to uriValue)
+                )
+            )
+        }
+        announceCurrent("선택한 갤러리 사진을 판정 서버로 보내 확인하겠습니다.")
+        viewModelScope.launch {
+            val outcome = networkJudgmentGateway.judge(
+                JudgmentRequest(
+                    requestId = requestId,
+                    cookingSessionId = session.id,
+                    recipeId = recipe.id,
+                    stepOrder = step.order,
+                    instruction = step.instruction,
+                    checkType = step.checkType,
+                    checkCondition = step.checkCondition,
+                    needsStartImage = step.shouldSendStartImage(),
+                    elapsedSeconds = ((System.currentTimeMillis() - session.currentStepStartedAtMs) / 1_000L)
+                        .toInt()
+                        .coerceAtLeast(0),
+                    baselineImageUri = session.baselineUriByStep[step.order],
+                    currentImageUri = uriValue,
+                    imagePolicy = JudgmentImagePolicy.MANUAL_MODE
+                )
+            )
+            handleJudgmentOutcome(outcome)
+        }
+    }
+
+    fun retryLastManualJudgment() {
+        val state = uiState.value
+        val session = state.session ?: return
+        val step = state.currentStep ?: return
+        if (session.mode != SessionMode.MANUAL_ONLY || state.judgingInFlight) return
+        val currentImageUri = session.lastCaptureUriByStep[step.order]
+        if (currentImageUri == null) {
+            val message = "다시 판정할 사진이 없습니다. 갤러리에서 사진을 선택해주세요."
+            mutableUiState.update { it.copy(judgeError = message) }
+            announceCurrent(message)
+            return
+        }
+        judgeGalleryImage(currentImageUri)
+    }
+
     /**
      * 디버그 전용 — 병렬 타이머를 지금 끝낸 것으로 만든다.
      *
@@ -427,9 +561,34 @@ class CookingSessionViewModel(
     }
 
     fun continueToNextStep() {
+        continueToNextStep(bypassDebounce = false, allowDuringStepStarting = false)
+    }
+
+    fun continueAutoButtonToNextStep() {
+        val session = uiState.value.session ?: return
+        if (session.mode == SessionMode.MANUAL_ONLY) {
+            continueManualButtonToNextStep()
+            return
+        }
+        continueToNextStep(bypassDebounce = true, allowDuringStepStarting = true)
+    }
+
+    fun continueManualButtonToNextStep() {
+        val session = uiState.value.session ?: return
+        if (session.mode != SessionMode.MANUAL_ONLY) {
+            continueToNextStep()
+            return
+        }
+        continueToNextStep(bypassDebounce = true, allowDuringStepStarting = false)
+    }
+
+    private fun continueToNextStep(
+        bypassDebounce: Boolean,
+        allowDuringStepStarting: Boolean
+    ) {
         val state = uiState.value
-        var session = state.session ?: return
-        if (session.phase == CookingPhase.STEP_STARTING) {
+        val session = state.session ?: return
+        if (blocksNextStepDuringStart(session.phase, allowDuringStepStarting)) {
             announceCurrent(
                 "현재 ${session.currentStepIndex + 1}단계 기준 촬영을 준비하고 있습니다. " +
                     "촬영이 끝날 때까지 기다려주세요."
@@ -437,15 +596,11 @@ class CookingSessionViewModel(
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastNextCommandAtMs < NEXT_COMMAND_DEBOUNCE_MS) {
+        if (!bypassDebounce && now - lastNextCommandAtMs < NEXT_COMMAND_DEBOUNCE_MS) {
             announceCurrent("다음 단계 요청을 이미 처리하고 있습니다.")
             return
         }
-        lastNextCommandAtMs = now
-        if (session.mode == SessionMode.MANUAL_ONLY && state.cameraState == WearableCameraState.Ready) {
-            session = session.copy(mode = SessionMode.AUTO, phase = CookingPhase.WAITING_FOR_CHECK)
-            mutableUiState.update { it.copy(currentScreen = AppScreen.S5_COOKING, session = session) }
-        }
+        if (!bypassDebounce) lastNextCommandAtMs = now
         val wasAutomaticallyCompleted =
             session.phase == CookingPhase.STEP_COMPLETED && session.currentVerdict == JudgmentVerdict.DONE
         advanceToNextStep(manual = !wasAutomaticallyCompleted)
@@ -521,7 +676,24 @@ class CookingSessionViewModel(
 
     fun moveToPreviousStep() {
         val session = uiState.value.session ?: return
-        if (session.currentStepIndex == 0) return
+        if (session.currentStepIndex == 0) {
+            cancelInspectionWork()
+            elapsedTickerJob?.cancel()
+            elapsedTickerJob = null
+            pendingManualInspectionStepOrder = null
+            mutableUiState.update {
+                it.copy(
+                    currentScreen = AppScreen.S4_DEVICE,
+                    session = session.copy(activeRequestId = null),
+                    hasResumableSession = true,
+                    resumeAutoAfterDeviceSetup = true,
+                    currentCaptureOutcome = null,
+                    judgeError = null,
+                    nextInspectionInSeconds = null
+                )
+            }
+            return
+        }
         val updated = session.copy(
             currentStepIndex = session.currentStepIndex - 1,
             undoDoneCount = session.undoDoneCount + if (session.phase == CookingPhase.STEP_COMPLETED) 1 else 0,
@@ -763,6 +935,13 @@ class CookingSessionViewModel(
             mutableUiState.update { ui -> ui.copy(session = session.copy(phase = if (manualOnly) CookingPhase.MANUAL_MODE else CookingPhase.WAITING_FOR_CHECK)) }
             return
         }
+        if (hasReusableStartImage(step, session)) {
+            mutableUiState.update { ui ->
+                ui.copy(session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK))
+            }
+            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+            return
+        }
         launchBaselineCapture(step, session.id)
     }
 
@@ -844,7 +1023,9 @@ class CookingSessionViewModel(
             cookingSessionId = session.id,
             stepOrder = step.order,
             purpose = CapturePurpose.BASELINE,
-            burstDurationMs = step.inspectionPolicy?.burstSeconds?.times(1_000L) ?: 3_000L
+            burstDurationMs = step.inspectionPolicy?.burstSeconds?.times(1_000L) ?: 3_000L,
+            streamTimeoutMs = CAMERA_STREAM_READY_TIMEOUT_MS,
+            captureTimeoutMs = CAMERA_PHOTO_CAPTURE_TIMEOUT_MS
         )
         val outcome = captureRequiredWithRetry(request, "기준 사진 촬영")
         when (outcome) {
@@ -972,8 +1153,8 @@ class CookingSessionViewModel(
             stepOrder = step.order,
             purpose = if (isManualRequest) CapturePurpose.MANUAL_CHECK else CapturePurpose.INSPECTION,
             burstDurationMs = step.inspectionPolicy?.burstSeconds?.times(1_000L) ?: 3_000L,
-            streamTimeoutMs = 7_000L,
-            captureTimeoutMs = 10_000L
+            streamTimeoutMs = CAMERA_STREAM_READY_TIMEOUT_MS,
+            captureTimeoutMs = CAMERA_PHOTO_CAPTURE_TIMEOUT_MS
         )
         mutableUiState.update {
             val currentSession = it.session ?: return@update it
@@ -993,6 +1174,8 @@ class CookingSessionViewModel(
     }
 
     private suspend fun handleCaptureOutcome(request: CaptureRequest, outcome: CaptureOutcome) {
+        val current = uiState.value
+        if (!isCurrentCaptureRequest(current.session, current.currentStep?.order, request)) return
         when (outcome) {
             is CaptureOutcome.Failure -> {
                 val timeoutCount = if (outcome.kind == CaptureFailureKind.STREAM_TIMEOUT) {
@@ -1100,7 +1283,12 @@ class CookingSessionViewModel(
                             ((System.currentTimeMillis() - it.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
                         } ?: 0,
                         baselineImageUri = state.session?.baselineUriByStep?.get(step.order),
-                        currentImageUri = outcome.artifact.imageUri
+                        currentImageUri = outcome.artifact.imageUri,
+                        imagePolicy = if (state.session?.mode == SessionMode.MANUAL_ONLY) {
+                            JudgmentImagePolicy.MANUAL_MODE
+                        } else {
+                            JudgmentImagePolicy.AUTOMATIC_CAMERA
+                        }
                     )
                 )
                 handleJudgmentOutcome(judgmentOutcome)
@@ -1142,6 +1330,10 @@ class CookingSessionViewModel(
         }
         if (activeSession.activeRequestId != outcomeRequestId) return
         if (outcome is JudgmentOutcome.Success && !isCurrentJudgment(activeSession, current.currentStep?.order, outcome.result)) return
+        if (activeSession.mode == SessionMode.MANUAL_ONLY) {
+            handleManualGalleryJudgmentOutcome(outcome)
+            return
+        }
         when (outcome) {
             is JudgmentOutcome.Failure -> {
                 mutableUiState.update {
@@ -1172,6 +1364,139 @@ class CookingSessionViewModel(
 
             is JudgmentOutcome.Success -> {
                 applyVerdict(outcome.result)
+            }
+        }
+    }
+
+    private fun handleManualGalleryJudgmentOutcome(outcome: JudgmentOutcome) {
+        when (outcome) {
+            is JudgmentOutcome.Failure -> {
+                mutableUiState.update {
+                    val session = it.session ?: return@update it
+                    it.copy(
+                        currentScreen = AppScreen.S8_MANUAL,
+                        judgingInFlight = false,
+                        judgeError = outcome.message,
+                        session = session.copy(
+                            phase = CookingPhase.MANUAL_MODE,
+                            activeRequestId = null,
+                            networkFailureCount = session.networkFailureCount + if (outcome.retryable) 1 else 0,
+                            logs = session.logs + SessionLogEntry(
+                                timestampMs = System.currentTimeMillis(),
+                                stepOrder = currentStepOrder(session),
+                                message = "갤러리 사진 판정 실패: ${outcome.message}",
+                                requestId = outcome.requestId,
+                                eventType = "NETWORK_FAILURE",
+                                requestedAtMs = outcome.requestedAtMs,
+                                respondedAtMs = outcome.respondedAtMs,
+                                imageUri = session.lastCaptureUriByStep[currentStepOrder(session)]
+                            )
+                        )
+                    )
+                }
+                announceCurrent("갤러리 사진을 판정하지 못했습니다. ${outcome.message}")
+            }
+
+            is JudgmentOutcome.Success -> {
+                val result = outcome.result
+                val completedAtMs = System.currentTimeMillis()
+                val shouldAutoAdvance = shouldAutoAdvanceManualVerdict(result.verdict)
+                val baselineTargetOrder = doneBaselineTarget(
+                    recipe = uiState.value.selectedRecipe,
+                    session = uiState.value.session,
+                    completedStepOrder = result.stepOrder,
+                    verdict = result.verdict
+                )?.first
+                mutableUiState.update {
+                    val session = it.session ?: return@update it
+                    val carriedBaseline = doneBaselineTarget(
+                        recipe = it.selectedRecipe,
+                        session = session,
+                        completedStepOrder = result.stepOrder,
+                        verdict = result.verdict
+                    )
+                    val updated = session.copy(
+                        phase = CookingPhase.MANUAL_MODE,
+                        activeRequestId = null,
+                        currentVerdict = result.verdict,
+                        lastRoundTripMs = result.roundTripMs,
+                        lastVlmLatencyMs = result.vlmLatencyMs,
+                        lastReasonCode = result.reasonCode,
+                        networkFailureCount = 0,
+                        baselineUriByStep = carriedBaseline?.let { baseline ->
+                            session.baselineUriByStep + baseline
+                        } ?: session.baselineUriByStep,
+                        completedStepOrders = if (shouldAutoAdvance) {
+                            session.completedStepOrders + result.stepOrder
+                        } else {
+                            session.completedStepOrders
+                        },
+                        stepCompletedAtMsByOrder = if (shouldAutoAdvance) {
+                            session.stepCompletedAtMsByOrder + (result.stepOrder to completedAtMs)
+                        } else {
+                            session.stepCompletedAtMsByOrder
+                        },
+                        autoDoneCount = session.autoDoneCount + if (result.verdict == JudgmentVerdict.DONE) 1 else 0,
+                        notDoneCount = session.notDoneCount + if (result.verdict == JudgmentVerdict.NOT_DONE) 1 else 0,
+                        cannotTellCount = session.cannotTellCount + if (result.verdict == JudgmentVerdict.CANNOT_TELL) 1 else 0,
+                        logs = buildList {
+                            addAll(session.logs)
+                            add(
+                                judgmentLog(
+                                    stepOrder = result.stepOrder,
+                                    result = result,
+                                    message = "GALLERY_${result.verdict.name}"
+                                )
+                            )
+                            carriedBaseline?.let { (nextStepOrder, imageUri) ->
+                                add(
+                                    SessionLogEntry(
+                                        timestampMs = System.currentTimeMillis(),
+                                        stepOrder = nextStepOrder,
+                                        message = "${result.stepOrder}단계 DONE 사진을 비교 시작 사진으로 사용",
+                                        eventType = "BASELINE_REUSED",
+                                        imageUri = imageUri
+                                    )
+                                )
+                            }
+                        }
+                    )
+                    it.copy(
+                        currentScreen = AppScreen.S8_MANUAL,
+                        judgingInFlight = false,
+                        judgeError = null,
+                        session = updated
+                    )
+                }
+                announceCurrent(
+                    when (result.verdict) {
+                        JudgmentVerdict.DONE -> if (baselineTargetOrder != null) {
+                            "선택한 사진을 완료 상태로 판정했습니다. ${baselineTargetOrder}단계 비교 시작 사진으로 사용하고 다음 단계로 넘어갑니다."
+                        } else {
+                            "선택한 사진을 완료 상태로 판정했습니다. 다음 단계로 넘어갑니다."
+                        }
+                        JudgmentVerdict.NOT_DONE -> "선택한 사진은 아직 완료 상태가 아닙니다. 현재 단계를 계속해주세요."
+                        JudgmentVerdict.CANNOT_TELL -> "선택한 사진만으로 판단하기 어렵습니다. 대상이 잘 보이는 사진을 다시 선택해주세요."
+                    }
+                )
+                if (shouldAutoAdvance) {
+                    autoAdvanceJob?.cancel()
+                    autoAdvanceJob = viewModelScope.launch {
+                        delay(AUTO_ADVANCE_DELAY_MS)
+                        val current = uiState.value
+                        val currentSession = current.session
+                        if (
+                            current.currentScreen == AppScreen.S8_MANUAL &&
+                            currentSession != null &&
+                            currentSession.mode == SessionMode.MANUAL_ONLY &&
+                            current.currentStep?.order == result.stepOrder &&
+                            currentSession.currentVerdict == JudgmentVerdict.DONE
+                        ) {
+                            autoAdvanceJob = null
+                            advanceToNextStep(manual = false)
+                        }
+                    }
+                }
             }
         }
     }
@@ -1208,6 +1533,12 @@ class CookingSessionViewModel(
                     return
                 }
                 val completedAt = System.currentTimeMillis()
+                val carriedBaseline = doneBaselineTarget(
+                    recipe = state.selectedRecipe,
+                    session = session,
+                    completedStepOrder = step.order,
+                    verdict = result.verdict
+                )
                 mutableUiState.update {
                     it.copy(
                         currentScreen = AppScreen.S6_STEP_DONE,
@@ -1223,9 +1554,26 @@ class CookingSessionViewModel(
                             lastRoundTripMs = result.roundTripMs,
                             lastVlmLatencyMs = result.vlmLatencyMs,
                             lastReasonCode = result.reasonCode,
+                            baselineUriByStep = carriedBaseline?.let { baseline ->
+                                session.baselineUriByStep + baseline
+                            } ?: session.baselineUriByStep,
                             completedStepOrders = session.completedStepOrders + step.order,
                             stepCompletedAtMsByOrder = session.stepCompletedAtMsByOrder + (step.order to completedAt),
-                            logs = session.logs + judgmentLog(step.order, result, "DONE")
+                            logs = buildList {
+                                addAll(session.logs)
+                                add(judgmentLog(step.order, result, "DONE"))
+                                carriedBaseline?.let { (nextStepOrder, imageUri) ->
+                                    add(
+                                        SessionLogEntry(
+                                            timestampMs = completedAt,
+                                            stepOrder = nextStepOrder,
+                                            message = "${step.order}단계 DONE 사진을 비교 시작 사진으로 사용",
+                                            eventType = "BASELINE_REUSED",
+                                            imageUri = imageUri
+                                        )
+                                    )
+                                }
+                            }
                         )
                     )
                 }
@@ -1259,6 +1607,7 @@ class CookingSessionViewModel(
                         )
                     )
                 }
+                announceCurrent("아직 완료 상태가 아니에요. 현재 단계를 계속해주세요.")
                 scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             }
 
@@ -1451,6 +1800,51 @@ internal fun isCurrentJudgment(
 ): Boolean = session.activeRequestId == result.requestId &&
     session.id == result.cookingSessionId &&
     currentStepOrder == result.stepOrder
+
+internal fun isCurrentCaptureRequest(
+    session: CookingSession?,
+    currentStepOrder: Int?,
+    request: CaptureRequest
+): Boolean = session?.id == request.cookingSessionId &&
+    session.activeRequestId == request.requestId &&
+    currentStepOrder == request.stepOrder
+
+internal fun galleryJudgmentValidationError(
+    step: RecipeStep,
+    hasBaselineImage: Boolean
+): String? = when {
+    !step.isAutoCheck || step.checkType == CheckType.TIMER_ONLY || step.checkCondition.isNullOrBlank() ->
+        "이 단계는 사진 판정을 사용하지 않습니다. 수동으로 다음 단계로 이동해주세요."
+    step.shouldSendStartImage() && !hasBaselineImage ->
+        "비교 판정에 필요한 시작 사진이 없습니다. 비교 시작 사진을 먼저 불러와주세요."
+    else -> null
+}
+
+internal fun doneBaselineTarget(
+    recipe: Recipe?,
+    session: CookingSession?,
+    completedStepOrder: Int,
+    verdict: JudgmentVerdict
+): Pair<Int, String>? {
+    if (recipe == null || session == null || verdict != JudgmentVerdict.DONE) return null
+    val completedIndex = recipe.steps.indexOfFirst { it.order == completedStepOrder }
+    if (completedIndex < 0) return null
+    val nextStep = recipe.steps.getOrNull(completedIndex + 1) ?: return null
+    if (!nextStep.needsStartImage || !nextStep.baselineOnStepStart) return null
+    val completedImageUri = session.lastCaptureUriByStep[completedStepOrder] ?: return null
+    return nextStep.order to completedImageUri
+}
+
+internal fun hasReusableStartImage(step: RecipeStep, session: CookingSession): Boolean =
+    step.shouldSendStartImage() && session.baselineUriByStep[step.order] != null
+
+internal fun shouldAutoAdvanceManualVerdict(verdict: JudgmentVerdict): Boolean =
+    verdict == JudgmentVerdict.DONE
+
+internal fun blocksNextStepDuringStart(
+    phase: CookingPhase,
+    allowDuringStepStarting: Boolean
+): Boolean = phase == CookingPhase.STEP_STARTING && !allowDuringStepStarting
 
 private fun cameraStateHint(state: WearableCameraState, isFake: Boolean): String {
     if (isFake) return "가짜 Gateway 상태: ${state::class.simpleName}"
