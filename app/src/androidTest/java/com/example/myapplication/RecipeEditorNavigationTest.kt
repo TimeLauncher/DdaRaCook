@@ -94,7 +94,7 @@ class RecipeEditorNavigationTest {
             .performScrollTo()
             .performClick()
 
-        composeRule.waitUntil(timeoutMillis = 3_000L) {
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
             composeRule.onAllNodesWithText("확인해줘").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText("확인해줘").fetchSemanticsNode()

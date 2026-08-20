@@ -45,7 +45,7 @@ private const val CAMERA_PHOTO_CAPTURE_TIMEOUT_MS = 20_000L
 private const val MAX_VIEWED_RECIPE_COUNT = 30
 private const val MANUAL_ADVANCE_BASELINE_DELAY_SECONDS = 5
 private const val PRESENTATION_CAPTURE_REVEAL_DELAY_MS = 3_000L
-private const val PRESENTATION_PAGE_ADVANCE_DELAY_MS = 700L
+private const val PRESENTATION_PAGE_ADVANCE_DELAY_MS = 1_500L
 
 class CookingSessionViewModel(
     application: Application

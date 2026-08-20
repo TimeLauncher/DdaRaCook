@@ -24,10 +24,10 @@ class CookingSessionViewModelInstrumentedTest {
         viewModel.openPresentationSimulationDetail()
         assertEquals(AppScreen.S2_RECIPE_DETAIL, viewModel.uiState.value.currentScreen)
 
-        delay(800L)
+        delay(1_600L)
         assertEquals(AppScreen.S4_DEVICE, viewModel.uiState.value.currentScreen)
 
-        delay(800L)
+        delay(1_600L)
         assertEquals(AppScreen.S5_COOKING, viewModel.uiState.value.currentScreen)
         assertFalse(viewModel.uiState.value.presentationCaptureVisible)
 
@@ -37,11 +37,11 @@ class CookingSessionViewModelInstrumentedTest {
         delay(700L)
         assertTrue(viewModel.uiState.value.presentationCaptureVisible)
 
-        delay(800L)
+        delay(1_600L)
         assertEquals(1, viewModel.uiState.value.session?.currentStepIndex)
         assertFalse(viewModel.uiState.value.presentationCaptureVisible)
 
-        val summary = withTimeout(18_000L) {
+        val summary = withTimeout(22_000L) {
             viewModel.uiState.first { it.currentScreen == AppScreen.S9_SUMMARY }
         }
         assertEquals(5, summary.session?.completedStepOrders?.size)
