@@ -326,10 +326,20 @@ private fun TtaraCookApp(
         ) {
             key(uiState.currentScreen) {
                 when (uiState.currentScreen) {
-                AppScreen.S1_HOME -> FigmaHomeScreen(
+                AppScreen.S0_SERVICE_HOME -> FigmaServiceHomeScreen(
+                    uiState = uiState,
+                    onRecipeClick = sessionViewModel::selectRecipe,
+                    onRecipes = sessionViewModel::openRecipePage,
+                    onAddRecipe = { sessionViewModel.openRecipeEditor() },
+                    onMy = sessionViewModel::openMyPage,
+                    onResume = sessionViewModel::resumeSavedSession
+                )
+
+                AppScreen.S1_HOME -> FigmaRecipeScreen(
                     uiState = uiState,
                     onRecipeClick = sessionViewModel::selectRecipe,
                     onToggleScrap = sessionViewModel::toggleRecipeScrap,
+                    onHome = sessionViewModel::backToHome,
                     onAddRecipe = { sessionViewModel.openRecipeEditor() },
                     onMy = sessionViewModel::openMyPage,
                     onPresentationSimulation = sessionViewModel::openPresentationSimulationDetail,
@@ -451,6 +461,7 @@ private fun TtaraCookApp(
                     AppScreen.S10_MY -> FigmaMyScreen(
                         uiState = uiState,
                         onHome = sessionViewModel::closeMyPage,
+                        onRecipes = sessionViewModel::openRecipePage,
                         onRecipeClick = sessionViewModel::selectRecipe,
                         onAddRecipe = { sessionViewModel.openRecipeEditor() },
                         onToggleScrap = sessionViewModel::toggleRecipeScrap,

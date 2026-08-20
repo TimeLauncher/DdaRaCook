@@ -24,6 +24,8 @@ class RecipeEditorNavigationTest {
 
     @Test
     fun homeOpensRecipeEditorAndSystemBackReturnsHome() {
+        composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
+        composeRule.onNodeWithText("레시피").performClick()
         composeRule.onNodeWithText("내 레시피").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("소세지야채볶음 대표 이미지").fetchSemanticsNode()
         composeRule.onNodeWithText("추가").assertHeightIsAtLeast(48.dp)
@@ -33,26 +35,27 @@ class RecipeEditorNavigationTest {
 
         pressBack()
 
-        composeRule.onNodeWithText("오늘은 무엇을 만들까요?").fetchSemanticsNode()
+        composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
     }
 
     @Test
     fun myPageOpensRequestedFeaturesAndSystemBackReturnsHome() {
         composeRule.onNodeWithText("마이").performClick()
 
-        composeRule.onNodeWithText("레시피 스크랩").fetchSemanticsNode()
-        composeRule.onNodeWithText("내가 본 레시피").fetchSemanticsNode()
-        composeRule.onNodeWithText("설정").performClick()
+        composeRule.onNodeWithContentDescription("찜한 레시피 메뉴").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("최근 본 레시피 메뉴").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("설정").performClick()
         composeRule.onNodeWithText("음성 안내").fetchSemanticsNode()
 
         pressBack()
-        composeRule.onNodeWithText("레시피 스크랩").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("찜한 레시피 메뉴").fetchSemanticsNode()
         pressBack()
-        composeRule.onNodeWithText("오늘은 무엇을 만들까요?").fetchSemanticsNode()
+        composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
     }
 
     @Test
     fun homeBookmarkScrapsRecipeAndShowsItOnMyPage() {
+        composeRule.onNodeWithText("레시피").performClick()
         val wasScrapped = composeRule
             .onAllNodesWithContentDescription("스크랩 해제: 소세지야채볶음")
             .fetchSemanticsNodes()
@@ -64,12 +67,13 @@ class RecipeEditorNavigationTest {
         composeRule.onNodeWithContentDescription("스크랩 해제: 소세지야채볶음").fetchSemanticsNode()
 
         composeRule.onNodeWithText("마이").performClick()
-        composeRule.onNodeWithText("레시피 스크랩").performClick()
+        composeRule.onNodeWithContentDescription("찜한 레시피 메뉴").performClick()
         composeRule.onNodeWithText("소세지야채볶음").fetchSemanticsNode()
 
         pressBack()
         pressBack()
         if (!wasScrapped) {
+            composeRule.onNodeWithText("레시피").performClick()
             composeRule.onNodeWithContentDescription("스크랩 해제: 소세지야채볶음").performClick()
             composeRule.onNodeWithContentDescription("스크랩 추가: 소세지야채볶음").fetchSemanticsNode()
         }
@@ -77,18 +81,20 @@ class RecipeEditorNavigationTest {
 
     @Test
     fun openingRecipeImmediatelyAddsItToViewedRecipes() {
+        composeRule.onNodeWithText("레시피").performClick()
         composeRule.onNodeWithContentDescription("우삼겹 파스타 레시피 카드").performClick()
         composeRule.onNodeWithText("우삼겹 파스타").fetchSemanticsNode()
 
         pressBack()
         composeRule.onNodeWithText("마이").performClick()
-        composeRule.onNodeWithText("내가 본 레시피").performClick()
+        composeRule.onNodeWithContentDescription("최근 본 레시피 메뉴").performClick()
 
         composeRule.onNodeWithText("우삼겹 파스타").fetchSemanticsNode()
     }
 
     @Test
     fun presentationCardUsesScriptedPhotoWithTheSameAutomaticControls() {
+        composeRule.onNodeWithText("레시피").performClick()
         composeRule
             .onNodeWithContentDescription("소세지 야채볶음 발표용 레시피 카드")
             .performScrollTo()

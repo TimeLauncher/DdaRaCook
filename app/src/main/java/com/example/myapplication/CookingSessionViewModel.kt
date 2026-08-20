@@ -351,7 +351,7 @@ class CookingSessionViewModel(
 
     fun cancelRecipeEditor() {
         mutableUiState.update {
-            it.copy(currentScreen = if (it.selectedRecipeId.isBlank()) AppScreen.S1_HOME else AppScreen.S2_RECIPE_DETAIL)
+            it.copy(currentScreen = if (it.selectedRecipeId.isBlank()) AppScreen.S0_SERVICE_HOME else AppScreen.S2_RECIPE_DETAIL)
         }
     }
 
@@ -410,7 +410,11 @@ class CookingSessionViewModel(
                 selectedRecipeId = recipeId,
                 currentScreen = AppScreen.S2_RECIPE_DETAIL,
                 viewedRecipeIds = viewedRecipeIds,
-                recipeDetailReturnScreen = if (state.currentScreen == AppScreen.S10_MY) AppScreen.S10_MY else AppScreen.S1_HOME,
+                recipeDetailReturnScreen = when (state.currentScreen) {
+                    AppScreen.S0_SERVICE_HOME -> AppScreen.S0_SERVICE_HOME
+                    AppScreen.S10_MY -> AppScreen.S10_MY
+                    else -> AppScreen.S1_HOME
+                },
                 session = null,
                 currentCaptureOutcome = null,
                 lastCaptureFailureKind = null,
@@ -426,8 +430,12 @@ class CookingSessionViewModel(
         mutableUiState.update { it.copy(currentScreen = AppScreen.S10_MY) }
     }
 
-    fun closeMyPage() {
+    fun openRecipePage() {
         mutableUiState.update { it.copy(currentScreen = AppScreen.S1_HOME) }
+    }
+
+    fun closeMyPage() {
+        mutableUiState.update { it.copy(currentScreen = AppScreen.S0_SERVICE_HOME) }
     }
 
     fun backFromRecipeDetail() {
@@ -437,7 +445,11 @@ class CookingSessionViewModel(
         }
         mutableUiState.update { state ->
             state.copy(
-                currentScreen = if (state.recipeDetailReturnScreen == AppScreen.S10_MY) AppScreen.S10_MY else AppScreen.S1_HOME
+                currentScreen = when (state.recipeDetailReturnScreen) {
+                    AppScreen.S0_SERVICE_HOME -> AppScreen.S0_SERVICE_HOME
+                    AppScreen.S10_MY -> AppScreen.S10_MY
+                    else -> AppScreen.S1_HOME
+                }
             )
         }
     }
@@ -465,7 +477,7 @@ class CookingSessionViewModel(
         persistence.saveSession(null)
         mutableUiState.update {
             it.copy(
-                currentScreen = AppScreen.S1_HOME,
+                currentScreen = AppScreen.S0_SERVICE_HOME,
                 session = null,
                 hasResumableSession = false,
                 nextInspectionInSeconds = null,

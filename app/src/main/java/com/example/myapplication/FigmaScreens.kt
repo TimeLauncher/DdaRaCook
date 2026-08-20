@@ -123,10 +123,247 @@ private fun figmaSummaryStepImageResource(recipe: Recipe, stepOrder: Int): Int? 
 }
 
 @Composable
-internal fun FigmaHomeScreen(
+internal fun FigmaServiceHomeScreen(
+    uiState: CookingSessionUiState,
+    onRecipeClick: (String) -> Unit,
+    onRecipes: () -> Unit,
+    onAddRecipe: () -> Unit,
+    onMy: () -> Unit,
+    onResume: () -> Unit
+) {
+    val heroRecipe = uiState.recipes.firstOrNull {
+        it.id == "sausage-vegetable-stir-fry" || it.title.replace(" ", "").contains("소세지야채볶음")
+    } ?: uiState.recipes.firstOrNull()
+    val connectionLabel = figmaGlassesConnectionLabel(uiState.cameraState)
+    val connected = connectionLabel == "안경 연결됨"
+    val resumeSession = uiState.session
+    val resumeRecipe = uiState.selectedRecipe
+
+    Box(Modifier.fillMaxSize().background(Color(0xFFFFFCF7))) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 82.dp)
+        ) {
+            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("따라쿡", color = FigmaOrange, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "● $connectionLabel",
+                        color = if (connected) FigmaGreen else FigmaMuted,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (connected) FigmaGreenSurface else FigmaSurface)
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                    )
+                }
+                Spacer(Modifier.height(9.dp))
+                Text("오늘 저녁, 준비됐나요?", color = FigmaInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(174.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(Color(0xFFFFE7C3))
+                        .clickable(enabled = heroRecipe != null) { heroRecipe?.let { onRecipeClick(it.id) } }
+                        .padding(start = 18.dp, top = 17.dp, bottom = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("TODAY · 오늘의 요리", color = Color(0xFFC4470E), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(5.dp))
+                        Text("소시지 야채볶음", color = FigmaInk, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(5.dp))
+                        Text("약 20분 · 재료 5/7 준비", color = Color(0xFF765B45), fontSize = 11.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "안경으로 요리 시작  →",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(15.dp))
+                                .background(FigmaOrange)
+                                .padding(horizontal = 13.dp, vertical = 9.dp)
+                        )
+                    }
+                    Image(
+                        painter = painterResource(R.drawable.figma_service_home_mascot),
+                        contentDescription = "따라쿡 요리 마스코트",
+                        modifier = Modifier.width(118.dp).height(138.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+
+                Spacer(Modifier.height(22.dp))
+                FigmaHomeSectionHeader("이번 주 요리 계획", "식단 편집  ›")
+                Spacer(Modifier.height(9.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    FigmaWeeklyPlanCard("오늘", "김치볶음밥", true, Modifier.weight(1f))
+                    FigmaWeeklyPlanCard("금요일", "계란말이", false, Modifier.weight(1f))
+                    FigmaWeeklyPlanCard("토요일", "비빔국수", false, Modifier.weight(1f))
+                }
+
+                Spacer(Modifier.height(22.dp))
+                FigmaHomeSectionHeader("바로 실행")
+                Spacer(Modifier.height(9.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    FigmaQuickAction("✦", "재료로", "요리 추천", Color(0xFFEAF7E6), FigmaGreen, Modifier.weight(1f), onRecipes)
+                    FigmaQuickAction("▦", "이번 주", "식단 보기", Color(0xFFEAF2FF), Color(0xFF3869A9), Modifier.weight(1f), {})
+                    FigmaQuickAction("✓", "장보기", "2개 남음", Color(0xFFFFEEE0), Color(0xFFCB6921), Modifier.weight(1f), {})
+                }
+
+                Spacer(Modifier.height(22.dp))
+                FigmaHomeSectionHeader("우리 집 재료로 뭐 해먹지?")
+                Spacer(Modifier.height(9.dp))
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.White)
+                        .border(1.dp, FigmaDivider, RoundedCornerShape(20.dp))
+                        .padding(15.dp)
+                ) {
+                    Text("등록된 재료 6개", color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(3.dp))
+                    Text("있는 재료를 조합해 오늘 만들 요리를 골라보세요", color = FigmaMuted, fontSize = 10.sp)
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FigmaIngredientChip("김치")
+                        FigmaIngredientChip("달걀")
+                        FigmaIngredientChip("대파")
+                    }
+                    Spacer(Modifier.height(11.dp))
+                    Text(
+                        "재료로 추천받기  →",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(FigmaOrange)
+                            .clickable(onClick = onRecipes)
+                            .padding(horizontal = 13.dp, vertical = 9.dp)
+                    )
+                }
+
+                if (uiState.hasResumableSession && resumeSession != null && resumeRecipe != null) {
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(76.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(FigmaInk)
+                            .clickable(onClick = onResume)
+                            .padding(horizontal = 15.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "진행 중 · ${(resumeSession.currentStepIndex + 1).coerceAtMost(resumeRecipe.steps.size)}/${resumeRecipe.steps.size} 단계",
+                                color = Color(0xFFFFB16C),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(resumeRecipe.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text("이어하기  ›", color = FigmaOrange, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+
+        FigmaBottomNavigation(
+            modifier = Modifier.align(Alignment.BottomCenter),
+            selected = FigmaNavDestination.HOME,
+            onHome = {},
+            onRecipes = onRecipes,
+            onAddRecipe = onAddRecipe,
+            onMy = onMy
+        )
+    }
+}
+
+@Composable
+private fun FigmaHomeSectionHeader(title: String, action: String? = null) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(title, color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        action?.let { Text(it, color = FigmaOrange, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
+@Composable
+private fun FigmaWeeklyPlanCard(day: String, dish: String, selected: Boolean, modifier: Modifier) {
+    Column(
+        modifier
+            .height(78.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (selected) Color(0xFFFFE7CF) else Color.White)
+            .border(1.dp, if (selected) Color(0xFFF4B27C) else FigmaDivider, RoundedCornerShape(16.dp))
+            .padding(horizontal = 11.dp, vertical = 12.dp)
+    ) {
+        Text(day, color = if (selected) FigmaOrange else FigmaMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.weight(1f))
+        Text(dish, color = FigmaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
+@Composable
+private fun FigmaQuickAction(
+    symbol: String,
+    title: String,
+    detail: String,
+    background: Color,
+    accent: Color,
+    modifier: Modifier,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier
+            .height(92.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(background)
+            .clickable(onClick = onClick)
+            .padding(12.dp)
+    ) {
+        Text(symbol, color = accent, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.weight(1f))
+        Text(title, color = FigmaInk, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(detail, color = accent, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun FigmaIngredientChip(label: String) {
+    Text(
+        label,
+        color = Color(0xFF6A5545),
+        fontSize = 10.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFFFF3E7))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    )
+}
+
+@Composable
+internal fun FigmaRecipeScreen(
     uiState: CookingSessionUiState,
     onRecipeClick: (String) -> Unit,
     onToggleScrap: (String) -> Unit,
+    onHome: () -> Unit,
     onAddRecipe: () -> Unit,
     onMy: () -> Unit,
     onPresentationSimulation: () -> Unit,
@@ -230,8 +467,9 @@ internal fun FigmaHomeScreen(
 
         FigmaBottomNavigation(
             modifier = Modifier.align(Alignment.BottomCenter),
-            selected = FigmaNavDestination.HOME,
-            onHome = {},
+            selected = FigmaNavDestination.RECIPES,
+            onHome = onHome,
+            onRecipes = {},
             onAddRecipe = onAddRecipe,
             onMy = onMy
         )
@@ -295,12 +533,13 @@ private fun FigmaRecipeCard(
     }
 }
 
-private enum class FigmaNavDestination { HOME, MY }
+private enum class FigmaNavDestination { HOME, RECIPES, MY }
 
 @Composable
 private fun FigmaBottomNavigation(
     selected: FigmaNavDestination,
     onHome: () -> Unit,
+    onRecipes: () -> Unit,
     onAddRecipe: () -> Unit,
     onMy: () -> Unit,
     modifier: Modifier = Modifier
@@ -315,7 +554,7 @@ private fun FigmaBottomNavigation(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         FigmaNavItem(R.drawable.figma_icon_home, "홈", selected == FigmaNavDestination.HOME, onHome)
-        FigmaNavItem(R.drawable.figma_icon_recipes, "레시피", false, onHome)
+        FigmaNavItem(R.drawable.figma_icon_recipes, "레시피", selected == FigmaNavDestination.RECIPES, onRecipes)
         FigmaNavItem(R.drawable.figma_icon_add, "추가", false, onAddRecipe)
         FigmaNavItem(R.drawable.figma_icon_profile, "마이", selected == FigmaNavDestination.MY, onMy)
     }
@@ -421,12 +660,13 @@ private fun FigmaScrapButton(
     }
 }
 
-private enum class FigmaMySection { OVERVIEW, SCRAPS, VIEWED, SETTINGS }
+private enum class FigmaMySection { OVERVIEW, SCRAPS, CREATED, VIEWED, SETTINGS }
 
 @Composable
 internal fun FigmaMyScreen(
     uiState: CookingSessionUiState,
     onHome: () -> Unit,
+    onRecipes: () -> Unit,
     onRecipeClick: (String) -> Unit,
     onAddRecipe: () -> Unit,
     onToggleScrap: (String) -> Unit,
@@ -434,7 +674,14 @@ internal fun FigmaMyScreen(
 ) {
     var section by remember { mutableStateOf(FigmaMySection.OVERVIEW) }
     val scrappedRecipes = uiState.recipes.filter { it.id in uiState.scrappedRecipeIds }
+    val createdRecipes = uiState.recipes.filter { it.id.startsWith("recipe-") }
     val viewedRecipes = uiState.viewedRecipeIds.mapNotNull { id -> uiState.recipes.firstOrNull { it.id == id } }
+    val cookingRecordCount = uiState.session?.logs
+        ?.filter { it.verdict == JudgmentVerdict.DONE }
+        ?.map { it.stepOrder }
+        ?.distinct()
+        ?.size ?: 0
+    val connectionLabel = figmaGlassesConnectionLabel(uiState.cameraState)
 
     BackHandler {
         if (section == FigmaMySection.OVERVIEW) onHome() else section = FigmaMySection.OVERVIEW
@@ -446,52 +693,120 @@ internal fun FigmaMyScreen(
         ) {
             when (section) {
                 FigmaMySection.OVERVIEW -> {
-                    Column(Modifier.padding(horizontal = 20.dp, vertical = 30.dp)) {
-                        Text("마이", color = FigmaInk, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(6.dp))
-                        Text("저장한 레시피와 이용 기록을 모아보세요", color = FigmaMuted, fontSize = 12.sp)
-                        Spacer(Modifier.height(28.dp))
-                        FigmaMyMenuRow(
-                            icon = R.drawable.figma_icon_recipes,
-                            title = "레시피 스크랩",
-                            detail = "${scrappedRecipes.size}개 저장됨",
-                            onClick = { section = FigmaMySection.SCRAPS }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        FigmaMyMenuRow(
-                            icon = R.drawable.figma_icon_search,
-                            title = "내가 본 레시피",
-                            detail = "최근 본 레시피 ${viewedRecipes.size}개",
-                            onClick = { section = FigmaMySection.VIEWED }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        FigmaMyMenuRow(
-                            icon = R.drawable.figma_icon_profile,
-                            title = "설정",
-                            detail = "음성 안내 및 앱 정보",
-                            onClick = { section = FigmaMySection.SETTINGS }
-                        )
+                    Column {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 24.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("마이", color = FigmaInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                FigmaIconButton(R.drawable.figma_icon_settings, "설정", { section = FigmaMySection.SETTINGS })
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text("내 레시피와 요리 기록을 한곳에서 관리해요", color = FigmaMuted, fontSize = 11.sp)
+                        }
+
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFFFFF8F0))
+                                .padding(horizontal = 16.dp, vertical = 14.dp)
+                        ) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(118.dp)
+                                    .clip(RoundedCornerShape(22.dp))
+                                    .background(Color(0xFFFFF0DB))
+                                    .padding(horizontal = 15.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Image(
+                                    painter = painterResource(R.drawable.figma_my_profile_mascot),
+                                    contentDescription = "따라쿡 프로필 마스코트",
+                                    modifier = Modifier.size(78.dp),
+                                    contentScale = ContentScale.Fit
+                                )
+                                Spacer(Modifier.width(13.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("건호님의 주방", color = FigmaInk, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("함께 완성한 요리 ${cookingRecordCount}개", color = FigmaMuted, fontSize = 10.sp)
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "● $connectionLabel",
+                                        color = if (connectionLabel == "안경 연결됨") FigmaGreen else FigmaMuted,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(if (connectionLabel == "안경 연결됨") FigmaGreenSurface else Color.White)
+                                            .padding(horizontal = 9.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FigmaMyStatCard(scrappedRecipes.size, "찜한 레시피", Color(0xFFFFEEE0), Color(0xFFCB6921), Modifier.weight(1f))
+                            FigmaMyStatCard(createdRecipes.size, "내 레시피", Color(0xFFEAF2FF), Color(0xFF3869A9), Modifier.weight(1f))
+                            FigmaMyStatCard(cookingRecordCount, "요리 기록", Color(0xFFEAF7E6), FigmaGreen, Modifier.weight(1f))
+                        }
+
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            Text("요리 보관함", color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(9.dp))
+                            FigmaMyLibraryRow("♡", "찜한 레시피", "${scrappedRecipes.size}개", { section = FigmaMySection.SCRAPS })
+                            Spacer(Modifier.height(7.dp))
+                            FigmaMyLibraryRow("＋", "내가 만든 레시피", "${createdRecipes.size}개", { section = FigmaMySection.CREATED })
+                            Spacer(Modifier.height(7.dp))
+                            FigmaMyLibraryRow("◷", "최근 본 레시피", "${viewedRecipes.size}개", { section = FigmaMySection.VIEWED })
+
+                            Spacer(Modifier.height(22.dp))
+                            Text("서비스 설정", color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(9.dp))
+                            FigmaMySettingsRow("안경 연결 및 권한", connectionLabel, {})
+                            HorizontalDivider(color = FigmaDivider, thickness = 0.5.dp)
+                            FigmaMySettingsRow("음성 안내 설정", null, { section = FigmaMySection.SETTINGS })
+                            HorizontalDivider(color = FigmaDivider, thickness = 0.5.dp)
+                            FigmaMySettingsRow("사진 · 데이터 관리", null, {})
+                            Spacer(Modifier.height(20.dp))
+                        }
                     }
                 }
 
                 FigmaMySection.SCRAPS -> {
-                    FigmaTopBar("레시피 스크랩", { section = FigmaMySection.OVERVIEW })
+                    FigmaTopBar("찜한 레시피", { section = FigmaMySection.OVERVIEW })
                     FigmaMyRecipeList(
                         recipes = scrappedRecipes,
-                        emptyTitle = "스크랩한 레시피가 없어요",
-                        emptyDetail = "레시피 상세에서 스크랩 버튼을 눌러 저장해 보세요.",
+                        emptyTitle = "찜한 레시피가 없어요",
+                        emptyDetail = "레시피 화면에서 하트 버튼을 눌러 저장해 보세요.",
                         onRecipeClick = onRecipeClick,
-                        actionLabel = "스크랩 해제",
+                        actionLabel = "찜 해제",
                         onAction = onToggleScrap
                     )
                 }
 
+                FigmaMySection.CREATED -> {
+                    FigmaTopBar("내가 만든 레시피", { section = FigmaMySection.OVERVIEW }, actionLabel = "추가", onAction = onAddRecipe)
+                    FigmaMyRecipeList(
+                        recipes = createdRecipes,
+                        emptyTitle = "직접 만든 레시피가 없어요",
+                        emptyDetail = "추가 버튼을 눌러 나만의 레시피를 만들어 보세요.",
+                        onRecipeClick = onRecipeClick
+                    )
+                }
+
                 FigmaMySection.VIEWED -> {
-                    FigmaTopBar("내가 본 레시피", { section = FigmaMySection.OVERVIEW })
+                    FigmaTopBar("최근 본 레시피", { section = FigmaMySection.OVERVIEW })
                     FigmaMyRecipeList(
                         recipes = viewedRecipes,
                         emptyTitle = "아직 본 레시피가 없어요",
-                        emptyDetail = "홈에서 레시피를 열면 최근 본 순서로 표시됩니다.",
+                        emptyDetail = "레시피 화면에서 레시피를 열면 최근 본 순서로 표시됩니다.",
                         onRecipeClick = onRecipeClick
                     )
                 }
@@ -526,10 +841,72 @@ internal fun FigmaMyScreen(
         FigmaBottomNavigation(
             selected = FigmaNavDestination.MY,
             onHome = onHome,
+            onRecipes = onRecipes,
             onAddRecipe = onAddRecipe,
             onMy = { section = FigmaMySection.OVERVIEW },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+    }
+}
+
+@Composable
+private fun FigmaMyStatCard(
+    count: Int,
+    label: String,
+    background: Color,
+    accent: Color,
+    modifier: Modifier
+) {
+    Column(
+        modifier
+            .height(74.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(background),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(count.toString(), color = accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(3.dp))
+        Text(label, color = FigmaMuted, fontSize = 9.sp)
+    }
+}
+
+@Composable
+private fun FigmaMyLibraryRow(symbol: String, title: String, count: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(58.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(FigmaSurface)
+            .semantics { contentDescription = "$title 메뉴" }
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(FigmaWarmIcon), contentAlignment = Alignment.Center) {
+            Text(symbol, color = FigmaOrange, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(11.dp))
+        Text(title, color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Text(count, color = FigmaMuted, fontSize = 10.sp)
+        Spacer(Modifier.width(7.dp))
+        Text("›", color = FigmaMuted, fontSize = 17.sp)
+    }
+}
+
+@Composable
+private fun FigmaMySettingsRow(title: String, status: String?, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().height(53.dp).clickable(onClick = onClick).padding(horizontal = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, color = FigmaInk, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        status?.let {
+            Text(it, color = if (it == "안경 연결됨") FigmaGreen else FigmaMuted, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(7.dp))
+        }
+        Text("›", color = FigmaMuted, fontSize = 17.sp)
     }
 }
 

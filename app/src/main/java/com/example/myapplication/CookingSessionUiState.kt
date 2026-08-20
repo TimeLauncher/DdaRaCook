@@ -5,6 +5,7 @@ import com.example.myapplication.camera.CaptureOutcome
 import com.example.myapplication.camera.WearableCameraState
 
 enum class AppScreen {
+    S0_SERVICE_HOME,
     S1_HOME,
     S2_RECIPE_DETAIL,
     S3_RECIPE_EDITOR,
@@ -25,8 +26,8 @@ data class PendingAnnouncement(
 data class CookingSessionUiState(
     val recipes: List<Recipe>,
     val selectedRecipeId: String = recipes.firstOrNull()?.id.orEmpty(),
-    val currentScreen: AppScreen = AppScreen.S1_HOME,
-    val recipeDetailReturnScreen: AppScreen = AppScreen.S1_HOME,
+    val currentScreen: AppScreen = AppScreen.S0_SERVICE_HOME,
+    val recipeDetailReturnScreen: AppScreen = AppScreen.S0_SERVICE_HOME,
     val session: CookingSession? = null,
     val cameraState: WearableCameraState = WearableCameraState.NotStarted,
     val currentCaptureOutcome: CaptureOutcome? = null,
