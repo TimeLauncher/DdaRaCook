@@ -68,6 +68,29 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         preferences.edit().putBoolean(KEY_USE_MOCK_JUDGMENT, enabled).apply()
     }
 
+    fun loadScrappedRecipeIds(): Set<String> =
+        preferences.getStringSet(KEY_SCRAPPED_RECIPE_IDS, emptySet()).orEmpty().toSet()
+
+    fun saveScrappedRecipeIds(recipeIds: Set<String>) {
+        preferences.edit().putStringSet(KEY_SCRAPPED_RECIPE_IDS, recipeIds).apply()
+    }
+
+    fun loadViewedRecipeIds(): List<String> = runCatching {
+        val values = JSONArray(preferences.getString(KEY_VIEWED_RECIPE_IDS, "[]"))
+        List(values.length()) { index -> values.getString(index) }
+    }.getOrDefault(emptyList())
+
+    fun saveViewedRecipeIds(recipeIds: List<String>) {
+        preferences.edit().putString(KEY_VIEWED_RECIPE_IDS, JSONArray(recipeIds).toString()).apply()
+    }
+
+    fun loadVoiceGuidanceEnabled(): Boolean =
+        preferences.getBoolean(KEY_VOICE_GUIDANCE_ENABLED, true)
+
+    fun saveVoiceGuidanceEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_VOICE_GUIDANCE_ENABLED, enabled).apply()
+    }
+
     internal fun clear() {
         preferences.edit().clear().commit()
     }
@@ -77,6 +100,9 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SESSION = "active_session"
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
+        const val KEY_SCRAPPED_RECIPE_IDS = "scrapped_recipe_ids"
+        const val KEY_VIEWED_RECIPE_IDS = "viewed_recipe_ids"
+        const val KEY_VOICE_GUIDANCE_ENABLED = "voice_guidance_enabled"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
         const val CURRENT_FIXTURE_VERSION = 10
     }

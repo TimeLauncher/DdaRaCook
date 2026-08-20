@@ -13,6 +13,24 @@ import org.junit.Test
 
 class CookingDomainTest {
     @Test
+    fun sausageFourthStepHidesCompletionCriteriaForRealAndPresentationFlows() {
+        assertFalse(
+            shouldShowFigmaCompletionCriteria(
+                recipeId = PresentationSimulation.RECIPE_ID,
+                stepOrder = 4,
+                hasComparisonMedia = true
+            )
+        )
+        assertTrue(
+            shouldShowFigmaCompletionCriteria(
+                recipeId = PresentationSimulation.RECIPE_ID,
+                stepOrder = 3,
+                hasComparisonMedia = true
+            )
+        )
+    }
+
+    @Test
     fun persistedRecipesAreMigratedToThirtySecondAutomaticInspection() {
         val migrated = RecipeFixtures.sampleRecipes().map { recipe ->
             recipe.copy(steps = recipe.steps.map { step ->
@@ -255,6 +273,38 @@ class CookingDomainTest {
 
         assertTrue(hasReusableStartImage(stepFour, session))
         assertFalse(hasReusableStartImage(stepFour, session.copy(baselineUriByStep = emptyMap())))
+    }
+
+    @Test
+    fun manualAdvanceWithoutDonePhotoCapturesBaselineAfterFiveSecondsThenStartsInspection() {
+        val stepFour = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+            .first { it.order == 4 }
+
+        val plan = baselineCapturePlan(
+            step = stepFour,
+            manuallyAdvancedIntoStep = true
+        )
+
+        assertEquals(5, plan.delaySeconds)
+        assertFalse(plan.inspectionRunsWhileWaitingForBaseline)
+    }
+
+    @Test
+    fun baselineOnStepStartWithoutManualAdvanceRemainsImmediate() {
+        val stepFour = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+            .first { it.order == 4 }
+
+        val plan = baselineCapturePlan(
+            step = stepFour,
+            manuallyAdvancedIntoStep = false
+        )
+
+        assertEquals(0, plan.delaySeconds)
+        assertFalse(plan.inspectionRunsWhileWaitingForBaseline)
     }
 
     @Test

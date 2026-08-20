@@ -13,7 +13,8 @@ enum class AppScreen {
     S6_STEP_DONE,
     S7_NEEDS_VIEW,
     S8_MANUAL,
-    S9_SUMMARY
+    S9_SUMMARY,
+    S10_MY
 }
 
 data class PendingAnnouncement(
@@ -25,6 +26,7 @@ data class CookingSessionUiState(
     val recipes: List<Recipe>,
     val selectedRecipeId: String = recipes.firstOrNull()?.id.orEmpty(),
     val currentScreen: AppScreen = AppScreen.S1_HOME,
+    val recipeDetailReturnScreen: AppScreen = AppScreen.S1_HOME,
     val session: CookingSession? = null,
     val cameraState: WearableCameraState = WearableCameraState.NotStarted,
     val currentCaptureOutcome: CaptureOutcome? = null,
@@ -51,8 +53,17 @@ data class CookingSessionUiState(
     val loadError: String? = null,
     val serverReady: Boolean? = null,
     val serverStatusMessage: String? = null,
-    val serverBaseUrl: String = ""
+    val serverBaseUrl: String = "",
+    val scrappedRecipeIds: Set<String> = emptySet(),
+    val viewedRecipeIds: List<String> = emptyList(),
+    val voiceGuidanceEnabled: Boolean = true,
+    val presentationSimulationSelected: Boolean = false,
+    val presentationCaptureVisible: Boolean = false
 ) {
+    val isPresentationSimulation: Boolean
+        get() = presentationSimulationSelected ||
+            session?.logs?.any { it.eventType == PresentationSimulation.EVENT_TYPE } == true
+
     val selectedRecipe: Recipe?
         get() = recipes.firstOrNull { it.id == selectedRecipeId }
 

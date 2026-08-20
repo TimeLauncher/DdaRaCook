@@ -88,6 +88,21 @@ class AppPersistenceInstrumentedTest {
     }
 
     @Test
+    fun myPageDataSurvivesRoundTrip() {
+        assertEquals(emptySet<String>(), persistence.loadScrappedRecipeIds())
+        assertEquals(emptyList<String>(), persistence.loadViewedRecipeIds())
+        assertEquals(true, persistence.loadVoiceGuidanceEnabled())
+
+        persistence.saveScrappedRecipeIds(setOf("doenjang", "eggroll"))
+        persistence.saveViewedRecipeIds(listOf("eggroll", "doenjang"))
+        persistence.saveVoiceGuidanceEnabled(false)
+
+        assertEquals(setOf("doenjang", "eggroll"), persistence.loadScrappedRecipeIds())
+        assertEquals(listOf("eggroll", "doenjang"), persistence.loadViewedRecipeIds())
+        assertEquals(false, persistence.loadVoiceGuidanceEnabled())
+    }
+
+    @Test
     fun legacyFixturesMigrateToSausageRecipeAndKeepCustomRecipes() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val fixtures = RecipeFixtures.sampleRecipes()

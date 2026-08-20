@@ -2,7 +2,9 @@ package com.example.myapplication
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,10 +53,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -118,9 +126,20 @@ private fun figmaSummaryStepImageResource(recipe: Recipe, stepOrder: Int): Int? 
 internal fun FigmaHomeScreen(
     uiState: CookingSessionUiState,
     onRecipeClick: (String) -> Unit,
+    onToggleScrap: (String) -> Unit,
     onAddRecipe: () -> Unit,
+    onMy: () -> Unit,
+    onPresentationSimulation: () -> Unit,
     onResume: () -> Unit
 ) {
+    val presentationCard = PresentationSimulation.homeCard(uiState.recipes)
+    val homeRecipes = buildList {
+        uiState.recipes.forEach { recipe ->
+            add(recipe)
+            if (recipe.id == "eggroll" && presentationCard != null) add(presentationCard)
+        }
+        if (presentationCard != null && none { it.id == presentationCard.id }) add(presentationCard)
+    }
     Box(Modifier.fillMaxSize().background(Color.White)) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 94.dp)
@@ -182,12 +201,25 @@ internal fun FigmaHomeScreen(
                 if (uiState.recipes.isEmpty() && !uiState.isLoading) {
                     FigmaMessageCard("저장된 레시피가 없어요", "아래 추가 버튼으로 첫 레시피를 만들어 보세요.")
                 }
-                uiState.recipes.chunked(2).forEachIndexed { rowIndex, recipes ->
+                homeRecipes.chunked(2).forEachIndexed { rowIndex, recipes ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         recipes.forEachIndexed { index, recipe ->
+                            val isPresentationCard = recipe.id == PresentationSimulation.CARD_ID
                             val fallbackImage = if ((rowIndex * 2 + index) % 2 == 0) R.drawable.figma_home_resume else R.drawable.figma_home_onion
                             val image = figmaHomeRecipeImageResource(recipe, fallbackImage)
-                            FigmaRecipeCard(recipe, image, Modifier.weight(1f), onRecipeClick)
+                            FigmaRecipeCard(
+                                recipe = recipe,
+                                imageRes = image,
+                                isScrapped = recipe.id in uiState.scrappedRecipeIds,
+                                badge = if (isPresentationCard) "발표용" else null,
+                                modifier = Modifier.weight(1f),
+                                onRecipeClick = if (isPresentationCard) {
+                                    { _: String -> onPresentationSimulation() }
+                                } else {
+                                    onRecipeClick
+                                },
+                                onToggleScrap = if (isPresentationCard) null else onToggleScrap
+                            )
                         }
                         if (recipes.size == 1) Spacer(Modifier.weight(1f))
                     }
@@ -198,17 +230,63 @@ internal fun FigmaHomeScreen(
 
         FigmaBottomNavigation(
             modifier = Modifier.align(Alignment.BottomCenter),
-            onAddRecipe = onAddRecipe
+            selected = FigmaNavDestination.HOME,
+            onHome = {},
+            onAddRecipe = onAddRecipe,
+            onMy = onMy
         )
     }
 }
 
 @Composable
-private fun FigmaRecipeCard(recipe: Recipe, imageRes: Int, modifier: Modifier, onRecipeClick: (String) -> Unit) {
+private fun FigmaRecipeCard(
+    recipe: Recipe,
+    imageRes: Int,
+    isScrapped: Boolean,
+    badge: String? = null,
+    modifier: Modifier,
+    onRecipeClick: (String) -> Unit,
+    onToggleScrap: ((String) -> Unit)?
+) {
     Column(
-        modifier.height(264.dp).clip(RoundedCornerShape(18.dp)).background(FigmaSurface).clickable { onRecipeClick(recipe.id) }
+        modifier
+            .height(264.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(FigmaSurface)
+            .semantics {
+                contentDescription = if (badge != null) {
+                    "${recipe.title} 발표용 레시피 카드"
+                } else {
+                    "${recipe.title} 레시피 카드"
+                }
+            }
+            .clickable { onRecipeClick(recipe.id) }
     ) {
-        FigmaResourceImage(imageRes, "${recipe.title} 대표 이미지", Modifier.fillMaxWidth().height(166.dp), 0.dp)
+        Box(Modifier.fillMaxWidth().height(166.dp)) {
+            FigmaResourceImage(imageRes, "${recipe.title} 대표 이미지", Modifier.fillMaxSize(), 0.dp)
+            if (badge != null) {
+                Text(
+                    badge,
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(10.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(FigmaOrange)
+                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                )
+            }
+            if (onToggleScrap != null) {
+                FigmaScrapButton(
+                    isScrapped = isScrapped,
+                    recipeTitle = recipe.title,
+                    onClick = { onToggleScrap(recipe.id) },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)
+                )
+            }
+        }
         Column(Modifier.padding(12.dp)) {
             Text(recipe.title, color = FigmaInk, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2)
             Spacer(Modifier.height(4.dp))
@@ -217,16 +295,29 @@ private fun FigmaRecipeCard(recipe: Recipe, imageRes: Int, modifier: Modifier, o
     }
 }
 
+private enum class FigmaNavDestination { HOME, MY }
+
 @Composable
-private fun FigmaBottomNavigation(modifier: Modifier = Modifier, onAddRecipe: () -> Unit) {
+private fun FigmaBottomNavigation(
+    selected: FigmaNavDestination,
+    onHome: () -> Unit,
+    onAddRecipe: () -> Unit,
+    onMy: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Row(
-        modifier.fillMaxWidth().height(94.dp).background(Color.White).border(BorderStroke(0.5.dp, FigmaDivider)).padding(horizontal = 20.dp, vertical = 12.dp),
+        modifier
+            .fillMaxWidth()
+            .height(62.dp)
+            .background(Color.White)
+            .border(BorderStroke(0.5.dp, FigmaDivider))
+            .padding(horizontal = 20.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        FigmaNavItem(R.drawable.figma_icon_home, "홈", true)
-        FigmaNavItem(R.drawable.figma_icon_recipes, "레시피", false)
+        FigmaNavItem(R.drawable.figma_icon_home, "홈", selected == FigmaNavDestination.HOME, onHome)
+        FigmaNavItem(R.drawable.figma_icon_recipes, "레시피", false, onHome)
         FigmaNavItem(R.drawable.figma_icon_add, "추가", false, onAddRecipe)
-        FigmaNavItem(R.drawable.figma_icon_profile, "마이", false)
+        FigmaNavItem(R.drawable.figma_icon_profile, "마이", selected == FigmaNavDestination.MY, onMy)
     }
 }
 
@@ -244,7 +335,290 @@ private fun FigmaNavItem(icon: Int, label: String, selected: Boolean, onClick: (
 }
 
 @Composable
-internal fun FigmaRecipeDetailScreen(recipe: Recipe, onBack: () -> Unit, onStart: () -> Unit, onEdit: () -> Unit) {
+private fun FigmaScrapButton(
+    isScrapped: Boolean,
+    recipeTitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val description = if (isScrapped) "스크랩 해제: $recipeTitle" else "스크랩 추가: $recipeTitle"
+    Box(
+        modifier
+            .size(34.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.94f))
+            .semantics { contentDescription = description }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(20.dp)) {
+            val heart = Path().apply {
+                moveTo(size.width * 0.5f, size.height * 0.9f)
+                cubicTo(
+                    size.width * 0.44f,
+                    size.height * 0.82f,
+                    size.width * 0.12f,
+                    size.height * 0.6f,
+                    size.width * 0.1f,
+                    size.height * 0.34f
+                )
+                cubicTo(
+                    size.width * 0.08f,
+                    size.height * 0.14f,
+                    size.width * 0.23f,
+                    size.height * 0.05f,
+                    size.width * 0.37f,
+                    size.height * 0.08f
+                )
+                cubicTo(
+                    size.width * 0.44f,
+                    size.height * 0.09f,
+                    size.width * 0.49f,
+                    size.height * 0.14f,
+                    size.width * 0.5f,
+                    size.height * 0.2f
+                )
+                cubicTo(
+                    size.width * 0.51f,
+                    size.height * 0.14f,
+                    size.width * 0.56f,
+                    size.height * 0.09f,
+                    size.width * 0.63f,
+                    size.height * 0.08f
+                )
+                cubicTo(
+                    size.width * 0.77f,
+                    size.height * 0.05f,
+                    size.width * 0.92f,
+                    size.height * 0.14f,
+                    size.width * 0.9f,
+                    size.height * 0.34f
+                )
+                cubicTo(
+                    size.width * 0.88f,
+                    size.height * 0.6f,
+                    size.width * 0.56f,
+                    size.height * 0.82f,
+                    size.width * 0.5f,
+                    size.height * 0.9f
+                )
+                close()
+            }
+            if (isScrapped) {
+                drawPath(heart, color = FigmaInk)
+            } else {
+                drawPath(
+                    path = heart,
+                    color = FigmaInk,
+                    style = Stroke(
+                        width = 2.6.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
+                )
+            }
+        }
+    }
+}
+
+private enum class FigmaMySection { OVERVIEW, SCRAPS, VIEWED, SETTINGS }
+
+@Composable
+internal fun FigmaMyScreen(
+    uiState: CookingSessionUiState,
+    onHome: () -> Unit,
+    onRecipeClick: (String) -> Unit,
+    onAddRecipe: () -> Unit,
+    onToggleScrap: (String) -> Unit,
+    onVoiceGuidanceChange: (Boolean) -> Unit
+) {
+    var section by remember { mutableStateOf(FigmaMySection.OVERVIEW) }
+    val scrappedRecipes = uiState.recipes.filter { it.id in uiState.scrappedRecipeIds }
+    val viewedRecipes = uiState.viewedRecipeIds.mapNotNull { id -> uiState.recipes.firstOrNull { it.id == id } }
+
+    BackHandler {
+        if (section == FigmaMySection.OVERVIEW) onHome() else section = FigmaMySection.OVERVIEW
+    }
+
+    Box(Modifier.fillMaxSize().background(Color.White)) {
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 76.dp)
+        ) {
+            when (section) {
+                FigmaMySection.OVERVIEW -> {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 30.dp)) {
+                        Text("마이", color = FigmaInk, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                        Text("저장한 레시피와 이용 기록을 모아보세요", color = FigmaMuted, fontSize = 12.sp)
+                        Spacer(Modifier.height(28.dp))
+                        FigmaMyMenuRow(
+                            icon = R.drawable.figma_icon_recipes,
+                            title = "레시피 스크랩",
+                            detail = "${scrappedRecipes.size}개 저장됨",
+                            onClick = { section = FigmaMySection.SCRAPS }
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        FigmaMyMenuRow(
+                            icon = R.drawable.figma_icon_search,
+                            title = "내가 본 레시피",
+                            detail = "최근 본 레시피 ${viewedRecipes.size}개",
+                            onClick = { section = FigmaMySection.VIEWED }
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        FigmaMyMenuRow(
+                            icon = R.drawable.figma_icon_profile,
+                            title = "설정",
+                            detail = "음성 안내 및 앱 정보",
+                            onClick = { section = FigmaMySection.SETTINGS }
+                        )
+                    }
+                }
+
+                FigmaMySection.SCRAPS -> {
+                    FigmaTopBar("레시피 스크랩", { section = FigmaMySection.OVERVIEW })
+                    FigmaMyRecipeList(
+                        recipes = scrappedRecipes,
+                        emptyTitle = "스크랩한 레시피가 없어요",
+                        emptyDetail = "레시피 상세에서 스크랩 버튼을 눌러 저장해 보세요.",
+                        onRecipeClick = onRecipeClick,
+                        actionLabel = "스크랩 해제",
+                        onAction = onToggleScrap
+                    )
+                }
+
+                FigmaMySection.VIEWED -> {
+                    FigmaTopBar("내가 본 레시피", { section = FigmaMySection.OVERVIEW })
+                    FigmaMyRecipeList(
+                        recipes = viewedRecipes,
+                        emptyTitle = "아직 본 레시피가 없어요",
+                        emptyDetail = "홈에서 레시피를 열면 최근 본 순서로 표시됩니다.",
+                        onRecipeClick = onRecipeClick
+                    )
+                }
+
+                FigmaMySection.SETTINGS -> {
+                    FigmaTopBar("설정", { section = FigmaMySection.OVERVIEW })
+                    Column(Modifier.padding(horizontal = 20.dp)) {
+                        Text("조리 안내", color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(10.dp))
+                        FigmaMyMenuRow(
+                            icon = R.drawable.figma_icon_mic,
+                            title = "음성 안내",
+                            detail = if (uiState.voiceGuidanceEnabled) "단계 안내를 음성으로 들려줘요" else "음성 안내가 꺼져 있어요",
+                            trailingLabel = if (uiState.voiceGuidanceEnabled) "켜짐" else "꺼짐",
+                            onClick = { onVoiceGuidanceChange(!uiState.voiceGuidanceEnabled) }
+                        )
+                        Spacer(Modifier.height(28.dp))
+                        Text("앱 정보", color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(10.dp))
+                        FigmaMyMenuRow(
+                            icon = R.drawable.figma_icon_profile,
+                            title = "따라쿡",
+                            detail = "버전 ${BuildConfig.VERSION_NAME}",
+                            trailingLabel = null,
+                            onClick = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        FigmaBottomNavigation(
+            selected = FigmaNavDestination.MY,
+            onHome = onHome,
+            onAddRecipe = onAddRecipe,
+            onMy = { section = FigmaMySection.OVERVIEW },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
+}
+
+@Composable
+private fun FigmaMyMenuRow(
+    icon: Int,
+    title: String,
+    detail: String,
+    onClick: () -> Unit,
+    trailingLabel: String? = ">"
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 82.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(FigmaSurface)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(FigmaWarmIcon), contentAlignment = Alignment.Center) {
+            FigmaResourceIcon(icon, null, 22.dp)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, color = FigmaInk, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(4.dp))
+            Text(detail, color = FigmaMuted, fontSize = 11.sp)
+        }
+        trailingLabel?.let {
+            Text(it, color = if (it == "켜짐") FigmaGreen else FigmaMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun FigmaMyRecipeList(
+    recipes: List<Recipe>,
+    emptyTitle: String,
+    emptyDetail: String,
+    onRecipeClick: (String) -> Unit,
+    actionLabel: String? = null,
+    onAction: ((String) -> Unit)? = null
+) {
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        if (recipes.isEmpty()) {
+            FigmaMessageCard(emptyTitle, emptyDetail)
+        } else {
+            recipes.forEach { recipe ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(116.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(FigmaSurface)
+                        .clickable { onRecipeClick(recipe.id) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FigmaResourceImage(
+                        figmaRecipeImageResource(recipe, R.drawable.figma_recipe_cover),
+                        "${recipe.title} 대표 이미지",
+                        Modifier.width(116.dp).height(116.dp),
+                        0.dp
+                    )
+                    Column(Modifier.weight(1f).padding(14.dp)) {
+                        Text(recipe.title, color = FigmaInk, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2)
+                        Spacer(Modifier.height(5.dp))
+                        Text("${recipe.totalDurationLabel} · ${recipe.steps.size}단계", color = FigmaMuted, fontSize = 11.sp)
+                        if (actionLabel != null && onAction != null) {
+                            TextButton(onClick = { onAction(recipe.id) }) {
+                                Text(actionLabel, color = FigmaOrange, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun FigmaRecipeDetailScreen(
+    recipe: Recipe,
+    onBack: () -> Unit,
+    onStart: () -> Unit,
+    onEdit: () -> Unit
+) {
     val errors = recipe.validationErrors()
     var ingredientsExpanded by remember(recipe.id) { mutableStateOf(false) }
     var stepsExpanded by remember(recipe.id) { mutableStateOf(false) }
@@ -392,6 +766,11 @@ internal fun FigmaCookingScreen(
     val recipe = uiState.selectedRecipe ?: return
     val step = uiState.currentStep ?: return
     val session = uiState.session ?: return
+    val simulationImage = if (uiState.isPresentationSimulation && uiState.presentationCaptureVisible) {
+        PresentationSimulation.captureImageResource(step.order)
+    } else {
+        null
+    }
     var showDiagnostics by remember { mutableStateOf(false) }
     val progress = step.order.toFloat() / recipe.steps.size.coerceAtLeast(1)
     Scaffold(
@@ -417,7 +796,7 @@ internal fun FigmaCookingScreen(
                     )
                     Text(recipe.title, color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Text(
-                        figmaGlassesConnectionLabel(uiState.cameraState),
+                        if (uiState.isPresentationSimulation) "안경 연결됨" else figmaGlassesConnectionLabel(uiState.cameraState),
                         color = FigmaGreen,
                         fontSize = 10.sp,
                         modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(FigmaGreenSurface).padding(horizontal = 10.dp, vertical = 7.dp)
@@ -441,11 +820,31 @@ internal fun FigmaCookingScreen(
                     ?: (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.artifact?.imageUri
                 val exampleImage = figmaSummaryStepImageResource(recipe, step.order)
                 val showCompletionComparison = step.needsStartImage && (exampleImage != null || baselineUri != null)
+                val showCompletionCriteria = shouldShowFigmaCompletionCriteria(
+                    recipeId = recipe.id,
+                    stepOrder = step.order,
+                    hasComparisonMedia = showCompletionComparison
+                )
                 if (showCompletionComparison) {
                     Text("눈으로 비교해보세요", color = FigmaInk, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(12.dp))
                 }
                 when {
+                    simulationImage != null && exampleImage != null -> FigmaReferenceAndResourceCurrentStage(
+                        exampleImageResource = exampleImage,
+                        currentImageResource = simulationImage,
+                        currentDescription = "${step.order}단계 최근 촬영",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    simulationImage != null -> FigmaResourceImage(
+                        simulationImage,
+                        "${step.order}단계 최근 촬영",
+                        Modifier
+                            .fillMaxWidth(0.6f)
+                            .align(Alignment.CenterHorizontally)
+                            .aspectRatio(SERVER_IMAGE_ASPECT_RATIO),
+                        22.dp
+                    )
                     exampleImage != null && currentPhotoUri != null -> FigmaReferenceAndCurrentStage(
                         exampleImageResource = exampleImage,
                         currentUri = currentPhotoUri,
@@ -470,7 +869,7 @@ internal fun FigmaCookingScreen(
                         22.dp
                     )
                 }
-                if (showCompletionComparison) {
+                if (showCompletionCriteria) {
                     Spacer(Modifier.height(12.dp))
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(FigmaYellowSurface).padding(16.dp)) {
                         Text("완료 기준", color = Color(0xFF8C610A), fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -483,6 +882,8 @@ internal fun FigmaCookingScreen(
                     Box(Modifier.size(8.dp).background(if (uiState.judgingInFlight) FigmaOrange else FigmaGreen, CircleShape))
                     Text(
                         when {
+                            simulationImage != null && exampleImage != null -> "단계 예시와 최근 촬영 · ${formatUiDuration(uiState.stepElapsedSeconds)}  |  평소에는 카메라 OFF"
+                            simulationImage != null -> "최근 촬영 · ${formatUiDuration(uiState.stepElapsedSeconds)}  |  평소에는 카메라 OFF"
                             exampleImage != null && currentPhotoUri != null -> "단계 예시와 최근 촬영 · ${formatUiDuration(uiState.stepElapsedSeconds)}  |  평소에는 카메라 OFF"
                             exampleImage != null -> "단계 예시 · 촬영 전  |  평소에는 카메라 OFF"
                             currentPhotoUri != null -> "최근 촬영 · ${formatUiDuration(uiState.stepElapsedSeconds)}  |  평소에는 카메라 OFF"
@@ -538,6 +939,14 @@ internal fun FigmaCookingScreen(
         }
     }
 }
+
+internal fun shouldShowFigmaCompletionCriteria(
+    recipeId: String,
+    stepOrder: Int,
+    hasComparisonMedia: Boolean
+): Boolean = hasComparisonMedia && !(
+    recipeId == PresentationSimulation.RECIPE_ID && stepOrder == 4
+)
 
 @Composable
 private fun FigmaJudgmentResultCard(
@@ -995,6 +1404,15 @@ internal fun FigmaSummaryScreen(
                 FigmaChip("${session.completedStepOrders.size}단계 모두 완료", selected = false, green = true)
             }
             Column(Modifier.padding(horizontal = 20.dp, vertical = 38.dp)) {
+                Text("완성 사진", color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(10.dp))
+                FigmaResourceImage(
+                    figmaRecipeImageResource(recipe, R.drawable.figma_recipe_hero),
+                    "${recipe.title} 완성 사진",
+                    Modifier.fillMaxWidth().height(228.dp),
+                    18.dp
+                )
+                Spacer(Modifier.height(28.dp))
                 Text("단계별 사진", color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.height(10.dp))
                 recipe.steps.chunked(2).forEach { steps ->
@@ -1002,8 +1420,18 @@ internal fun FigmaSummaryScreen(
                         steps.forEach { step ->
                             val photoUri = session.lastCaptureUriByStep[step.order]
                                 ?: session.baselineUriByStep[step.order]
-                            val exampleImage = figmaSummaryStepImageResource(recipe, step.order)
-                            FigmaSummaryPhoto(step, photoUri, exampleImage, Modifier.weight(1f))
+                            val exampleImage = if (uiState.isPresentationSimulation) {
+                                PresentationSimulation.captureImageResource(step.order)
+                            } else {
+                                figmaSummaryStepImageResource(recipe, step.order)
+                            }
+                            FigmaSummaryPhoto(
+                                step = step,
+                                uri = photoUri,
+                                exampleImageResource = exampleImage,
+                                modifier = Modifier.weight(1f),
+                                resourceIsCapturedPhoto = uiState.isPresentationSimulation
+                            )
                         }
                         if (steps.size == 1) Spacer(Modifier.weight(1f))
                     }
@@ -1040,12 +1468,18 @@ internal fun FigmaSummaryScreen(
 }
 
 @Composable
-private fun FigmaSummaryPhoto(step: RecipeStep, uri: String?, exampleImageResource: Int?, modifier: Modifier) {
+private fun FigmaSummaryPhoto(
+    step: RecipeStep,
+    uri: String?,
+    exampleImageResource: Int?,
+    modifier: Modifier,
+    resourceIsCapturedPhoto: Boolean = false
+) {
     Column(modifier.height(150.dp).clip(RoundedCornerShape(16.dp)).background(FigmaSurface)) {
         if (uri != null) FigmaUriImage(uri, "${step.order}단계 사진", Modifier.fillMaxWidth().height(112.dp), 0.dp)
         else if (exampleImageResource != null) FigmaResourceImage(
             exampleImageResource,
-            "${step.order}단계 예시 사진",
+            if (resourceIsCapturedPhoto) "${step.order}단계 사진" else "${step.order}단계 예시 사진",
             Modifier.fillMaxWidth().height(112.dp),
             0.dp
         )
@@ -1059,7 +1493,7 @@ private fun FigmaSummaryPhoto(step: RecipeStep, uri: String?, exampleImageResour
                 Text("촬영 기록 없음", color = FigmaMuted, fontSize = 10.sp)
             }
         }
-        val prefix = if (uri == null && exampleImageResource != null) "예시 · " else ""
+        val prefix = if (uri == null && exampleImageResource != null && !resourceIsCapturedPhoto) "예시 · " else ""
         Text("$prefix${step.order} · ${shortStepTitle(step.instruction)}", color = FigmaInk, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), maxLines = 1)
     }
 }
@@ -1085,6 +1519,51 @@ private fun FigmaReferenceAndCurrentStage(
         }
         if (showOriginalCurrent) FigmaOriginalGalleryImageCard(currentUri)
         else FigmaServerCurrentImageCard(currentUri)
+    }
+}
+
+@Composable
+private fun FigmaReferenceAndResourceCurrentStage(
+    exampleImageResource: Int,
+    currentImageResource: Int,
+    currentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            Modifier
+                .fillMaxWidth(0.6f)
+                .align(Alignment.CenterHorizontally)
+                .clip(RoundedCornerShape(16.dp))
+                .background(FigmaSurface)
+        ) {
+            FigmaResourceImage(
+                exampleImageResource,
+                "단계 예시 사진",
+                Modifier.fillMaxWidth().aspectRatio(SERVER_IMAGE_ASPECT_RATIO),
+                0.dp
+            )
+            Box(Modifier.fillMaxWidth().height(38.dp).background(FigmaWarmIcon), contentAlignment = Alignment.Center) {
+                Text("단계 예시", color = Color(0xFF71420F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        Column(
+            Modifier
+                .fillMaxWidth(0.6f)
+                .align(Alignment.CenterHorizontally)
+                .clip(RoundedCornerShape(16.dp))
+                .background(FigmaSurface)
+        ) {
+            FigmaResourceImage(
+                currentImageResource,
+                currentDescription,
+                Modifier.fillMaxWidth().aspectRatio(SERVER_IMAGE_ASPECT_RATIO),
+                0.dp
+            )
+            Box(Modifier.fillMaxWidth().height(38.dp).background(FigmaInk), contentAlignment = Alignment.Center) {
+                Text("현재", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -1213,6 +1692,14 @@ internal fun FigmaRecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, on
     var error by remember(existing?.id) { mutableStateOf<String?>(null) }
     var dirty by remember(existing?.id) { mutableStateOf(false) }
     var confirmCancel by remember(existing?.id) { mutableStateOf(false) }
+
+    BackHandler(enabled = !confirmCancel) {
+        when {
+            editingStep -> editingStep = false
+            dirty -> confirmCancel = true
+            else -> onCancel()
+        }
+    }
 
     fun loadStep(index: Int?) {
         editingIndex = index

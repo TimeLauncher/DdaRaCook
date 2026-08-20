@@ -42,6 +42,9 @@ private const val REQUIRED_CAPTURE_RETRY_DELAY_MS = 3_000L
 private const val NEXT_COMMAND_DEBOUNCE_MS = 3_000L
 private const val CAMERA_STREAM_READY_TIMEOUT_MS = 12_000L
 private const val CAMERA_PHOTO_CAPTURE_TIMEOUT_MS = 20_000L
+private const val MAX_VIEWED_RECIPE_COUNT = 30
+private const val MANUAL_ADVANCE_BASELINE_DELAY_SECONDS = 5
+private const val PRESENTATION_CAPTURE_REVEAL_DELAY_MS = 3_000L
 
 class CookingSessionViewModel(
     application: Application
@@ -58,6 +61,9 @@ class CookingSessionViewModel(
     private val initialRecipes = persistence.loadRecipes(fixtureRecipes).withAutomaticInspectionInterval()
     private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
     private val initialUseMockJudgment = persistence.loadUseMockJudgment(fallback = false)
+    private val initialScrappedRecipeIds = persistence.loadScrappedRecipeIds()
+    private val initialViewedRecipeIds = persistence.loadViewedRecipeIds()
+    private val initialVoiceGuidanceEnabled = persistence.loadVoiceGuidanceEnabled()
     private val restoredSession = persistence.loadSession()?.takeIf { saved ->
         initialRecipes.any { it.id == saved.recipeId } && saved.phase != CookingPhase.SESSION_COMPLETED
     }
@@ -75,7 +81,10 @@ class CookingSessionViewModel(
             } else {
                 "실제 Meta 안경 연결을 준비합니다."
             },
-            serverBaseUrl = initialServerBaseUrl
+            serverBaseUrl = initialServerBaseUrl,
+            scrappedRecipeIds = initialScrappedRecipeIds,
+            viewedRecipeIds = initialViewedRecipeIds,
+            voiceGuidanceEnabled = initialVoiceGuidanceEnabled
         )
     )
     val uiState: StateFlow<CookingSessionUiState> = mutableUiState.asStateFlow()
@@ -92,6 +101,7 @@ class CookingSessionViewModel(
     private var baselineCaptureJob: Job? = null
     private var elapsedTickerJob: Job? = null
     private var autoAdvanceJob: Job? = null
+    private var presentationCaptureRevealJob: Job? = null
     private var pendingManualInspectionStepOrder: Int? = null
     private var lastNextCommandAtMs = 0L
 
@@ -104,6 +114,7 @@ class CookingSessionViewModel(
                 val current = uiState.value
                 if (
                     !cameraGateway.isFake &&
+                    !current.isPresentationSimulation &&
                     current.session?.mode == SessionMode.AUTO &&
                     current.currentScreen in setOf(
                         AppScreen.S5_COOKING,
@@ -118,9 +129,183 @@ class CookingSessionViewModel(
         }
         viewModelScope.launch {
             uiState.collect { state ->
-                persistence.saveSession(state.session)
+                persistence.saveSession(state.session.takeUnless { state.isPresentationSimulation })
             }
         }
+    }
+
+    fun openPresentationSimulationDetail() {
+        cancelInspectionWork()
+        persistence.saveSession(null)
+        val recipe = uiState.value.recipes.firstOrNull {
+            it.id == PresentationSimulation.RECIPE_ID
+        } ?: return
+        mutableUiState.update {
+            it.copy(
+                selectedRecipeId = recipe.id,
+                currentScreen = AppScreen.S2_RECIPE_DETAIL,
+                recipeDetailReturnScreen = AppScreen.S1_HOME,
+                session = null,
+                hasResumableSession = false,
+                resumeAutoAfterDeviceSetup = false,
+                currentCaptureOutcome = null,
+                lastCaptureFailureKind = null,
+                nextInspectionInSeconds = null,
+                judgingInFlight = false,
+                judgeError = null,
+                presentationSimulationSelected = true,
+                presentationCaptureVisible = false
+            )
+        }
+    }
+
+    fun openPresentationSimulationDevicePreparation() {
+        cancelInspectionWork()
+        val recipe = uiState.value.recipes.firstOrNull {
+            it.id == PresentationSimulation.RECIPE_ID
+        } ?: return
+        val now = System.currentTimeMillis()
+        val session = createFreshSession(
+            recipeId = recipe.id,
+            phase = CookingPhase.READY
+        ).copy(
+            logs = listOf(
+                SessionLogEntry(
+                    timestampMs = now,
+                    stepOrder = recipe.steps.first().order,
+                    message = "발표용 자동모드 준비",
+                    eventType = PresentationSimulation.EVENT_TYPE
+                )
+            )
+        )
+        mutableUiState.update {
+            it.copy(
+                selectedRecipeId = recipe.id,
+                currentScreen = AppScreen.S4_DEVICE,
+                session = session,
+                cameraState = WearableCameraState.Ready,
+                deviceHint = "안경 카메라 준비 완료. 검사 순간에는 발표용 캡처본을 표시합니다.",
+                hasResumableSession = false,
+                resumeAutoAfterDeviceSetup = false,
+                currentCaptureOutcome = null,
+                judgeError = null,
+                nextInspectionInSeconds = null,
+                presentationSimulationSelected = true,
+                presentationCaptureVisible = false
+            )
+        }
+    }
+
+    fun startPresentationSimulation() {
+        cancelInspectionWork()
+        persistence.saveSession(null)
+        val recipe = uiState.value.recipes.firstOrNull {
+            it.id == PresentationSimulation.RECIPE_ID
+        } ?: return
+        val now = System.currentTimeMillis()
+        val session = createFreshSession(
+            recipeId = recipe.id,
+            phase = CookingPhase.WAITING_FOR_CHECK
+        ).copy(
+            currentStepStartedAtMs = now,
+            stepStartedAtMsByOrder = mapOf(recipe.steps.first().order to now),
+            logs = listOf(
+                SessionLogEntry(
+                    timestampMs = now,
+                    stepOrder = recipe.steps.first().order,
+                    message = "발표용 자동모드 시작",
+                    eventType = PresentationSimulation.EVENT_TYPE
+                )
+            )
+        )
+        mutableUiState.update {
+            it.copy(
+                selectedRecipeId = recipe.id,
+                currentScreen = AppScreen.S5_COOKING,
+                session = session,
+                hasResumableSession = false,
+                resumeAutoAfterDeviceSetup = false,
+                currentCaptureOutcome = null,
+                lastCaptureFailureKind = null,
+                nextInspectionInSeconds = null,
+                judgingInFlight = false,
+                judgeError = null,
+                presentationSimulationSelected = true,
+                presentationCaptureVisible = false
+            )
+        }
+        announceCurrent(recipe.steps.first().voicePrompt)
+        startElapsedTicker()
+        schedulePresentationCaptureReveal()
+    }
+
+    fun revealPresentationCapture() {
+        if (!uiState.value.isPresentationSimulation || uiState.value.currentScreen != AppScreen.S5_COOKING) return
+        presentationCaptureRevealJob?.cancel()
+        presentationCaptureRevealJob = null
+        mutableUiState.update { it.copy(presentationCaptureVisible = true) }
+    }
+
+    fun continuePresentationSimulation() {
+        val state = uiState.value
+        if (!state.isPresentationSimulation) {
+            continueAutoButtonToNextStep()
+            return
+        }
+        presentationCaptureRevealJob?.cancel()
+        presentationCaptureRevealJob = null
+        val recipe = state.selectedRecipe ?: return
+        val session = state.session ?: return
+        val now = System.currentTimeMillis()
+        val completedOrder = recipe.steps[session.currentStepIndex].order
+        val nextIndex = session.currentStepIndex + 1
+        val completed = session.copy(
+            completedStepOrders = session.completedStepOrders + completedOrder,
+            stepCompletedAtMsByOrder = session.stepCompletedAtMsByOrder + (completedOrder to now),
+            autoDoneCount = session.autoDoneCount + 1,
+            logs = session.logs + SessionLogEntry(
+                timestampMs = now,
+                stepOrder = completedOrder,
+                message = "발표용 캡처 확인 후 다음 단계",
+                eventType = PresentationSimulation.EVENT_TYPE
+            )
+        )
+        if (nextIndex >= recipe.steps.size) {
+            mutableUiState.update {
+                it.copy(
+                    currentScreen = AppScreen.S9_SUMMARY,
+                    session = completed.copy(
+                        phase = CookingPhase.SESSION_COMPLETED,
+                        completedAtMs = now
+                    ),
+                    nextInspectionInSeconds = null,
+                    presentationCaptureVisible = false
+                )
+            }
+            announceCurrent("${recipe.title} 조리가 끝났습니다.")
+            return
+        }
+        val nextStep = recipe.steps[nextIndex]
+        mutableUiState.update {
+            it.copy(
+                currentScreen = AppScreen.S5_COOKING,
+                session = completed.copy(
+                    phase = CookingPhase.WAITING_FOR_CHECK,
+                    currentStepIndex = nextIndex,
+                    currentStepStartedAtMs = now,
+                    stepStartedAtMsByOrder = completed.stepStartedAtMsByOrder + (nextStep.order to now),
+                    currentVerdict = null,
+                    activeRequestId = null
+                ),
+                currentCaptureOutcome = null,
+                nextInspectionInSeconds = null,
+                judgingInFlight = false,
+                judgeError = null,
+                presentationCaptureVisible = false
+            )
+        }
+        announceCurrent(nextStep.voicePrompt)
+        schedulePresentationCaptureReveal()
     }
 
     fun openRecipeEditor(recipeId: String? = null) {
@@ -130,7 +315,9 @@ class CookingSessionViewModel(
                 selectedRecipeId = recipeId ?: "",
                 currentScreen = AppScreen.S3_RECIPE_EDITOR,
                 session = null,
-                hasResumableSession = false
+                hasResumableSession = false,
+                presentationSimulationSelected = false,
+                presentationCaptureVisible = false
             )
         }
     }
@@ -206,24 +393,79 @@ class CookingSessionViewModel(
     }
 
     fun selectRecipe(recipeId: String) {
+        if (uiState.value.recipes.none { it.id == recipeId }) return
         cancelInspectionWork()
-        mutableUiState.update {
-            it.copy(
+        mutableUiState.update { state ->
+            val viewedRecipeIds = (listOf(recipeId) + state.viewedRecipeIds.filterNot { it == recipeId })
+                .take(MAX_VIEWED_RECIPE_COUNT)
+            persistence.saveViewedRecipeIds(viewedRecipeIds)
+            state.copy(
                 selectedRecipeId = recipeId,
                 currentScreen = AppScreen.S2_RECIPE_DETAIL,
+                viewedRecipeIds = viewedRecipeIds,
+                recipeDetailReturnScreen = if (state.currentScreen == AppScreen.S10_MY) AppScreen.S10_MY else AppScreen.S1_HOME,
                 session = null,
                 currentCaptureOutcome = null,
                 lastCaptureFailureKind = null,
                 judgeError = null,
-                nextInspectionInSeconds = null
+                nextInspectionInSeconds = null,
+                presentationSimulationSelected = false,
+                presentationCaptureVisible = false
             )
         }
+    }
+
+    fun openMyPage() {
+        mutableUiState.update { it.copy(currentScreen = AppScreen.S10_MY) }
+    }
+
+    fun closeMyPage() {
+        mutableUiState.update { it.copy(currentScreen = AppScreen.S1_HOME) }
+    }
+
+    fun backFromRecipeDetail() {
+        if (uiState.value.presentationSimulationSelected) {
+            backToHome()
+            return
+        }
+        mutableUiState.update { state ->
+            state.copy(
+                currentScreen = if (state.recipeDetailReturnScreen == AppScreen.S10_MY) AppScreen.S10_MY else AppScreen.S1_HOME
+            )
+        }
+    }
+
+    fun toggleRecipeScrap(recipeId: String) {
+        if (uiState.value.recipes.none { it.id == recipeId }) return
+        mutableUiState.update { state ->
+            val scrappedRecipeIds = if (recipeId in state.scrappedRecipeIds) {
+                state.scrappedRecipeIds - recipeId
+            } else {
+                state.scrappedRecipeIds + recipeId
+            }
+            persistence.saveScrappedRecipeIds(scrappedRecipeIds)
+            state.copy(scrappedRecipeIds = scrappedRecipeIds)
+        }
+    }
+
+    fun setVoiceGuidanceEnabled(enabled: Boolean) {
+        persistence.saveVoiceGuidanceEnabled(enabled)
+        mutableUiState.update { it.copy(voiceGuidanceEnabled = enabled) }
     }
 
     fun backToHome() {
         cancelInspectionWork()
         persistence.saveSession(null)
-        mutableUiState.update { it.copy(currentScreen = AppScreen.S1_HOME, session = null, hasResumableSession = false, nextInspectionInSeconds = null) }
+        mutableUiState.update {
+            it.copy(
+                currentScreen = AppScreen.S1_HOME,
+                session = null,
+                hasResumableSession = false,
+                nextInspectionInSeconds = null,
+                presentationSimulationSelected = false,
+                presentationCaptureVisible = false
+            )
+        }
     }
 
     fun backFromDevicePreparation() {
@@ -231,6 +473,22 @@ class CookingSessionViewModel(
         elapsedTickerJob?.cancel()
         elapsedTickerJob = null
         pendingManualInspectionStepOrder = null
+        if (uiState.value.isPresentationSimulation) {
+            mutableUiState.update {
+                it.copy(
+                    currentScreen = AppScreen.S2_RECIPE_DETAIL,
+                    session = null,
+                    hasResumableSession = false,
+                    resumeAutoAfterDeviceSetup = false,
+                    currentCaptureOutcome = null,
+                    judgeError = null,
+                    nextInspectionInSeconds = null,
+                    presentationSimulationSelected = true,
+                    presentationCaptureVisible = false
+                )
+            }
+            return
+        }
         mutableUiState.update { state ->
             val keepCookingSession = state.resumeAutoAfterDeviceSetup && state.session != null
             state.copy(
@@ -675,6 +933,10 @@ class CookingSessionViewModel(
             !session.parallelTimerFired
 
     fun moveToPreviousStep() {
+        if (uiState.value.isPresentationSimulation) {
+            moveToPreviousPresentationStep()
+            return
+        }
         val session = uiState.value.session ?: return
         if (session.currentStepIndex == 0) {
             cancelInspectionWork()
@@ -710,6 +972,45 @@ class CookingSessionViewModel(
         )
         mutableUiState.update { it.copy(session = updated, currentScreen = if (session.mode == SessionMode.MANUAL_ONLY) AppScreen.S8_MANUAL else AppScreen.S5_COOKING) }
         startStep(updated.currentStepIndex, manualOnly = updated.mode == SessionMode.MANUAL_ONLY, keepCounts = true)
+    }
+
+    private fun moveToPreviousPresentationStep() {
+        val state = uiState.value
+        val recipe = state.selectedRecipe ?: return
+        val session = state.session ?: return
+        if (session.currentStepIndex == 0) {
+            cancelInspectionWork()
+            mutableUiState.update {
+                it.copy(
+                    currentScreen = AppScreen.S4_DEVICE,
+                    presentationCaptureVisible = false
+                )
+            }
+            return
+        }
+        val previousIndex = session.currentStepIndex - 1
+        val previousStep = recipe.steps[previousIndex]
+        val now = System.currentTimeMillis()
+        mutableUiState.update {
+            it.copy(
+                currentScreen = AppScreen.S5_COOKING,
+                session = session.copy(
+                    phase = CookingPhase.WAITING_FOR_CHECK,
+                    currentStepIndex = previousIndex,
+                    currentStepStartedAtMs = now,
+                    stepStartedAtMsByOrder = session.stepStartedAtMsByOrder + (previousStep.order to now),
+                    currentVerdict = null,
+                    activeRequestId = null
+                ),
+                currentCaptureOutcome = null,
+                nextInspectionInSeconds = null,
+                judgingInFlight = false,
+                judgeError = null,
+                presentationCaptureVisible = false
+            )
+        }
+        announceCurrent(previousStep.voicePrompt)
+        schedulePresentationCaptureReveal()
     }
 
     fun keepCurrentStepAndReschedule() {
@@ -781,6 +1082,17 @@ class CookingSessionViewModel(
         val command = parseVoiceCommand(text)
         if (command == null || !isVoiceCommandAllowed(command, screen)) {
             onSpeechError("현재 화면에서 사용할 수 있는 음성 명령이 아닙니다.")
+            return
+        }
+        if (uiState.value.isPresentationSimulation) {
+            when (command) {
+                VoiceCommand.NEXT -> continuePresentationSimulation()
+                VoiceCommand.PREVIOUS -> moveToPreviousPresentationStep()
+                VoiceCommand.REPEAT -> repeatCurrentStep()
+                VoiceCommand.INGREDIENTS -> announceIngredients()
+                VoiceCommand.CURRENT_STEP -> announceCurrentStep()
+                else -> announceCurrent("발표용 모드에서는 다음, 다시, 이전 명령을 사용해주세요.")
+            }
             return
         }
         when (command) {
@@ -942,27 +1254,33 @@ class CookingSessionViewModel(
             scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             return
         }
-        launchBaselineCapture(step, session.id)
+        launchBaselineCapture(
+            step = step,
+            cookingSessionId = session.id,
+            manuallyAdvancedIntoStep = manualIncrement
+        )
     }
 
     private fun launchBaselineCapture(
         step: RecipeStep,
         cookingSessionId: String,
+        manuallyAdvancedIntoStep: Boolean = false,
         forceImmediate: Boolean = false
     ) {
         baselineCaptureJob?.cancel()
 
-        // 시작 시점 대비 비교를 하는 단계는 기준 사진이 "재료가 팬에 들어간 뒤"여야 한다.
-        // 단계 시작 직후에 찍으면 아직 빈 팬이라 비교 자체가 성립하지 않는다.
-        //
-        // 다만 앞 단계에서 사용자가 "재료를 넣고 다음"이라고 말했다면 그 시점이 곧 기준점이므로
-        // 기다릴 이유가 없다(`baselineOnStepStart`). 사용자가 "확인해줘"라고 한 경우도 마찬가지다.
-        val delayed = step.shouldSendStartImage() && !step.baselineOnStepStart && !forceImmediate
+        val capturePlan = baselineCapturePlan(
+            step = step,
+            manuallyAdvancedIntoStep = manuallyAdvancedIntoStep,
+            forceImmediate = forceImmediate
+        )
 
         // 기준 사진과 자동 검사는 **서로 다른 시계**로 돈다. 직렬로 묶으면 첫 검사가
         // 15 + 30 = 45초로 밀린다. 검사 카운트다운은 여기서 바로 시작하고,
-        // 기준 사진은 아래 코루틴이 제 시간에 따로 찍는다.
-        if (delayed) {
+        // 기준 사진은 아래 코루틴이 제 시간에 따로 찍는다. 단, 앞 단계를 수동 완료해서
+        // 재사용할 DONE 사진이 없는 baselineOnStepStart 단계는 5초 뒤 새 기준을 촬영한
+        // 시점부터 30초를 센다.
+        if (capturePlan.inspectionRunsWhileWaitingForBaseline) {
             mutableUiState.update { ui ->
                 val session = ui.session ?: return@update ui
                 ui.copy(session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK))
@@ -971,7 +1289,7 @@ class CookingSessionViewModel(
         }
 
         baselineCaptureJob = viewModelScope.launch {
-            if (delayed) delay(BASELINE_CAPTURE_DELAY_SECONDS * 1_000L)
+            if (capturePlan.delaySeconds > 0) delay(capturePlan.delaySeconds * 1_000L)
             val captured = captureBaseline(step)
             baselineCaptureJob = null
             val current = uiState.value
@@ -983,7 +1301,11 @@ class CookingSessionViewModel(
             // 지연 경로는 이미 WAITING_FOR_CHECK 로 넘어가 있다. 그 외에는 종전대로
             // 단계 시작 상태에서만 이어간다. 사용자 요청으로 끼어든 촬영은 예외다 — 그때는
             // 이미 WAITING_FOR_CHECK 이고, 여기서 빠져나가면 대기 중인 수동 검사가 영영 안 돈다.
-            if (!delayed && !forceImmediate && currentSession.phase != CookingPhase.STEP_STARTING) return@launch
+            if (
+                !capturePlan.inspectionRunsWhileWaitingForBaseline &&
+                !forceImmediate &&
+                currentSession.phase != CookingPhase.STEP_STARTING
+            ) return@launch
 
             if (!captured) {
                 val failure = current.currentCaptureOutcome as? CaptureOutcome.Failure
@@ -1004,12 +1326,16 @@ class CookingSessionViewModel(
                 ui.copy(
                     consecutiveCameraTimeouts = 0,
                     // 지연 경로에서는 이미 검사가 돌고 있을 수 있어 단계를 되돌리지 않는다.
-                    session = if (delayed) session else session.copy(phase = CookingPhase.WAITING_FOR_CHECK)
+                    session = if (capturePlan.inspectionRunsWhileWaitingForBaseline) {
+                        session
+                    } else {
+                        session.copy(phase = CookingPhase.WAITING_FOR_CHECK)
+                    }
                 )
             }
             if (runPendingManualInspection) {
                 triggerImmediateInspection()
-            } else if (!delayed) {
+            } else if (!capturePlan.inspectionRunsWhileWaitingForBaseline) {
                 scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
             }
         }
@@ -1675,6 +2001,27 @@ class CookingSessionViewModel(
         inspectionExecutionJob = null
         autoAdvanceJob?.cancel()
         autoAdvanceJob = null
+        presentationCaptureRevealJob?.cancel()
+        presentationCaptureRevealJob = null
+    }
+
+    private fun schedulePresentationCaptureReveal() {
+        presentationCaptureRevealJob?.cancel()
+        val expectedSessionId = uiState.value.session?.id ?: return
+        val expectedStepOrder = uiState.value.currentStep?.order ?: return
+        presentationCaptureRevealJob = viewModelScope.launch {
+            delay(PRESENTATION_CAPTURE_REVEAL_DELAY_MS)
+            val current = uiState.value
+            if (
+                current.isPresentationSimulation &&
+                current.currentScreen == AppScreen.S5_COOKING &&
+                current.session?.id == expectedSessionId &&
+                current.currentStep?.order == expectedStepOrder
+            ) {
+                mutableUiState.update { it.copy(presentationCaptureVisible = true) }
+            }
+            presentationCaptureRevealJob = null
+        }
     }
 
     private fun startElapsedTicker() {
@@ -1837,6 +2184,34 @@ internal fun doneBaselineTarget(
 
 internal fun hasReusableStartImage(step: RecipeStep, session: CookingSession): Boolean =
     step.shouldSendStartImage() && session.baselineUriByStep[step.order] != null
+
+internal data class BaselineCapturePlan(
+    val delaySeconds: Int,
+    val inspectionRunsWhileWaitingForBaseline: Boolean
+)
+
+internal fun baselineCapturePlan(
+    step: RecipeStep,
+    manuallyAdvancedIntoStep: Boolean,
+    forceImmediate: Boolean = false
+): BaselineCapturePlan = when {
+    forceImmediate -> BaselineCapturePlan(
+        delaySeconds = 0,
+        inspectionRunsWhileWaitingForBaseline = false
+    )
+    step.shouldSendStartImage() && step.baselineOnStepStart && manuallyAdvancedIntoStep -> BaselineCapturePlan(
+        delaySeconds = MANUAL_ADVANCE_BASELINE_DELAY_SECONDS,
+        inspectionRunsWhileWaitingForBaseline = false
+    )
+    step.shouldSendStartImage() && !step.baselineOnStepStart -> BaselineCapturePlan(
+        delaySeconds = BASELINE_CAPTURE_DELAY_SECONDS,
+        inspectionRunsWhileWaitingForBaseline = true
+    )
+    else -> BaselineCapturePlan(
+        delaySeconds = 0,
+        inspectionRunsWhileWaitingForBaseline = false
+    )
+}
 
 internal fun shouldAutoAdvanceManualVerdict(verdict: JudgmentVerdict): Boolean =
     verdict == JudgmentVerdict.DONE

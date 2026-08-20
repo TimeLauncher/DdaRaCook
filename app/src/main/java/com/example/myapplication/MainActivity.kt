@@ -133,7 +133,7 @@ private fun TtaraCookApp(
     val uiState by sessionViewModel.uiState.collectAsStateWithLifecycle()
     BackHandler(enabled = uiState.currentScreen in setOf(AppScreen.S2_RECIPE_DETAIL, AppScreen.S4_DEVICE, AppScreen.S5_COOKING, AppScreen.S8_MANUAL)) {
         when (uiState.currentScreen) {
-            AppScreen.S2_RECIPE_DETAIL -> sessionViewModel.backToHome()
+            AppScreen.S2_RECIPE_DETAIL -> sessionViewModel.backFromRecipeDetail()
             AppScreen.S4_DEVICE -> sessionViewModel.backFromDevicePreparation()
             AppScreen.S5_COOKING,
             AppScreen.S8_MANUAL -> sessionViewModel.moveToPreviousStep()
@@ -190,12 +190,13 @@ private fun TtaraCookApp(
             wakeWordController.release()
         }
     }
-    val voiceScreenActive = uiState.currentScreen in setOf(
-        AppScreen.S5_COOKING,
-        AppScreen.S6_STEP_DONE,
-        AppScreen.S7_NEEDS_VIEW,
-        AppScreen.S8_MANUAL
-    )
+    val voiceScreenActive = !uiState.isPresentationSimulation &&
+        uiState.currentScreen in setOf(
+            AppScreen.S5_COOKING,
+            AppScreen.S6_STEP_DONE,
+            AppScreen.S7_NEEDS_VIEW,
+            AppScreen.S8_MANUAL
+        )
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = sessionViewModel::onAudioPermissionResult
@@ -246,8 +247,12 @@ private fun TtaraCookApp(
         }
     }
 
-    LaunchedEffect(uiState.currentScreen, uiState.useFakeCamera) {
-        if (!uiState.useFakeCamera && uiState.currentScreen == AppScreen.S4_DEVICE) {
+    LaunchedEffect(uiState.currentScreen, uiState.useFakeCamera, uiState.isPresentationSimulation) {
+        if (
+            !uiState.isPresentationSimulation &&
+            !uiState.useFakeCamera &&
+            uiState.currentScreen == AppScreen.S4_DEVICE
+        ) {
             datAndroidPermissionLauncher.launch(datAndroidPermissions)
         }
     }
@@ -277,8 +282,12 @@ private fun TtaraCookApp(
         }
     }
 
-    LaunchedEffect(uiState.pendingAnnouncement?.id) {
-        uiState.pendingAnnouncement?.message?.let { speechController.speak(it) }
+    LaunchedEffect(uiState.pendingAnnouncement?.id, uiState.voiceGuidanceEnabled) {
+        if (uiState.voiceGuidanceEnabled) {
+            uiState.pendingAnnouncement?.message?.let { speechController.speak(it) }
+        } else {
+            speechController.stopSpeaking()
+        }
     }
 
     DisposableEffect(speechController) {
@@ -289,6 +298,24 @@ private fun TtaraCookApp(
             speechController.release()
         }
     }
+
+    val continueAutoFromButton = {
+        speechController.stopSpeaking()
+        wakeWordController.pause()
+        try {
+            if (uiState.isPresentationSimulation) {
+                sessionViewModel.continuePresentationSimulation()
+            } else {
+                sessionViewModel.continueAutoButtonToNextStep()
+            }
+        } finally {
+            wakeWordController.resume()
+        }
+    }
+    val noPresentationAction: () -> Unit = {}
+    val noPresentationVerdict: (JudgmentVerdict) -> Unit = {}
+    val noPresentationBoolean: (Boolean) -> Unit = {}
+    val noPresentationText: (String) -> Unit = {}
 
     Scaffold(containerColor = Ink) { innerPadding ->
         Surface(
@@ -302,14 +329,21 @@ private fun TtaraCookApp(
                 AppScreen.S1_HOME -> FigmaHomeScreen(
                     uiState = uiState,
                     onRecipeClick = sessionViewModel::selectRecipe,
+                    onToggleScrap = sessionViewModel::toggleRecipeScrap,
                     onAddRecipe = { sessionViewModel.openRecipeEditor() },
+                    onMy = sessionViewModel::openMyPage,
+                    onPresentationSimulation = sessionViewModel::openPresentationSimulationDetail,
                     onResume = sessionViewModel::resumeSavedSession
                 )
 
                 AppScreen.S2_RECIPE_DETAIL -> FigmaRecipeDetailScreen(
                     recipe = uiState.selectedRecipe ?: return@Surface,
-                    onBack = sessionViewModel::backToHome,
-                    onStart = sessionViewModel::openDevicePreparation,
+                    onBack = sessionViewModel::backFromRecipeDetail,
+                    onStart = if (uiState.isPresentationSimulation) {
+                        sessionViewModel::openPresentationSimulationDevicePreparation
+                    } else {
+                        sessionViewModel::openDevicePreparation
+                    },
                     onEdit = { sessionViewModel.openRecipeEditor(uiState.selectedRecipeId) }
                 )
 
@@ -322,43 +356,49 @@ private fun TtaraCookApp(
                 AppScreen.S4_DEVICE -> FigmaDeviceScreen(
                     uiState = uiState,
                     onBack = sessionViewModel::backFromDevicePreparation,
-                    onAdvance = {
-                        if (
-                            !uiState.useFakeCamera &&
-                            uiState.cameraState == WearableCameraState.PermissionRequired
-                        ) {
-                            wearableCameraPermissionLauncher.launch(Unit)
-                        } else {
-                            (context as? Activity)?.let(sessionViewModel::advanceDeviceSetup)
+                    onAdvance = if (uiState.isPresentationSimulation) {
+                        noPresentationAction
+                    } else {
+                        {
+                            if (
+                                !uiState.useFakeCamera &&
+                                uiState.cameraState == WearableCameraState.PermissionRequired
+                            ) {
+                                wearableCameraPermissionLauncher.launch(Unit)
+                            } else {
+                                (context as? Activity)?.let(sessionViewModel::advanceDeviceSetup)
+                            }
+                            Unit
                         }
                     },
-                    onDisconnect = sessionViewModel::simulateDeviceDisconnect,
-                    onError = sessionViewModel::simulateDeviceError,
-                    onStartWithoutGlasses = sessionViewModel::startWithoutGlasses,
-                    onStartCooking = sessionViewModel::startCooking
+                    onDisconnect = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::simulateDeviceDisconnect,
+                    onError = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::simulateDeviceError,
+                    onStartWithoutGlasses = if (uiState.isPresentationSimulation) sessionViewModel::startPresentationSimulation else sessionViewModel::startWithoutGlasses,
+                    onStartCooking = if (uiState.isPresentationSimulation) sessionViewModel::startPresentationSimulation else sessionViewModel::startCooking
                 )
 
                 AppScreen.S5_COOKING -> FigmaCookingScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
-                    onStartInspection = sessionViewModel::triggerImmediateInspection,
-                    onManualNext = {
-                        speechController.stopSpeaking()
-                        sessionViewModel.continueAutoButtonToNextStep()
+                    onStartInspection = if (uiState.isPresentationSimulation) {
+                        sessionViewModel::revealPresentationCapture
+                    } else {
+                        sessionViewModel::triggerImmediateInspection
                     },
-                    onNotYet = sessionViewModel::keepCurrentStepAndReschedule,
+                    onManualNext = continueAutoFromButton,
+                    onNotYet = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::keepCurrentStepAndReschedule,
                     onRepeat = sessionViewModel::repeatCurrentStep,
                     onPrevious = sessionViewModel::moveToPreviousStep,
-                    onDisableAuto = sessionViewModel::disableAutoMode,
-                    onUseBusyCapture = sessionViewModel::setFakeCaptureBehaviorBusy,
-                    onUseSuccessCapture = sessionViewModel::setFakeCaptureBehaviorSuccess,
-                    onUseDisconnectCapture = sessionViewModel::setFakeCaptureBehaviorDisconnect,
-                    onUseFailureCapture = sessionViewModel::setFakeCaptureBehaviorFailure,
-                    onMockVerdict = sessionViewModel::setMockVerdict,
-                    onSetMockEnabled = sessionViewModel::setMockJudgmentEnabled,
-                    onServerBaseUrlChange = sessionViewModel::setServerBaseUrl,
-                    onApplyServerBaseUrl = sessionViewModel::applyServerBaseUrl,
-                    onFinishParallelTimer = sessionViewModel::debugFinishParallelTimer,
+                    onDisableAuto = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::disableAutoMode,
+                    onUseBusyCapture = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::setFakeCaptureBehaviorBusy,
+                    onUseSuccessCapture = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::setFakeCaptureBehaviorSuccess,
+                    onUseDisconnectCapture = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::setFakeCaptureBehaviorDisconnect,
+                    onUseFailureCapture = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::setFakeCaptureBehaviorFailure,
+                    onMockVerdict = if (uiState.isPresentationSimulation) noPresentationVerdict else sessionViewModel::setMockVerdict,
+                    onSetMockEnabled = if (uiState.isPresentationSimulation) noPresentationBoolean else sessionViewModel::setMockJudgmentEnabled,
+                    onServerBaseUrlChange = if (uiState.isPresentationSimulation) noPresentationText else sessionViewModel::setServerBaseUrl,
+                    onApplyServerBaseUrl = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::applyServerBaseUrl,
+                    onFinishParallelTimer = if (uiState.isPresentationSimulation) noPresentationAction else sessionViewModel::debugFinishParallelTimer,
                     onVoice = {
                         if (uiState.audioPermissionGranted) {
                             speechController.startListening()
@@ -371,7 +411,7 @@ private fun TtaraCookApp(
                 AppScreen.S6_STEP_DONE -> FigmaStepDoneScreen(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
-                    onContinue = sessionViewModel::continueToNextStep,
+                    onContinue = continueAutoFromButton,
                     onUndo = sessionViewModel::moveToPreviousStep,
                     onFinishParallelTimer = sessionViewModel::debugFinishParallelTimer,
                     onVoice = {
@@ -383,7 +423,7 @@ private fun TtaraCookApp(
                     uiState = uiState,
                     wakeWordStatus = wakeWordStatus,
                     onRetry = sessionViewModel::triggerImmediateInspection,
-                    onNext = sessionViewModel::continueToNextStep
+                    onNext = continueAutoFromButton
                 )
 
                 AppScreen.S8_MANUAL -> FigmaManualModeScreen(
@@ -406,6 +446,15 @@ private fun TtaraCookApp(
                         onDone = sessionViewModel::backToHome,
                         onDeleteImages = sessionViewModel::deleteSessionImages,
                         onGroundTruth = sessionViewModel::recordGroundTruth
+                    )
+
+                    AppScreen.S10_MY -> FigmaMyScreen(
+                        uiState = uiState,
+                        onHome = sessionViewModel::closeMyPage,
+                        onRecipeClick = sessionViewModel::selectRecipe,
+                        onAddRecipe = { sessionViewModel.openRecipeEditor() },
+                        onToggleScrap = sessionViewModel::toggleRecipeScrap,
+                        onVoiceGuidanceChange = sessionViewModel::setVoiceGuidanceEnabled
                     )
                 }
             }

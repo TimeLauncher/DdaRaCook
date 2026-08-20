@@ -2,11 +2,15 @@ package com.example.myapplication
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -19,12 +23,124 @@ class RecipeEditorNavigationTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
-    fun homeOpensRecipeEditor() {
+    fun homeOpensRecipeEditorAndSystemBackReturnsHome() {
         composeRule.onNodeWithText("내 레시피").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("소세지야채볶음 대표 이미지").fetchSemanticsNode()
         composeRule.onNodeWithText("추가").assertHeightIsAtLeast(48.dp)
         composeRule.onNodeWithText("추가").performClick()
         composeRule.onNodeWithText("레시피 제목").fetchSemanticsNode()
         assertTrue(composeRule.onAllNodesWithText("요리 단계").fetchSemanticsNodes().isNotEmpty())
+
+        pressBack()
+
+        composeRule.onNodeWithText("오늘은 무엇을 만들까요?").fetchSemanticsNode()
+    }
+
+    @Test
+    fun myPageOpensRequestedFeaturesAndSystemBackReturnsHome() {
+        composeRule.onNodeWithText("마이").performClick()
+
+        composeRule.onNodeWithText("레시피 스크랩").fetchSemanticsNode()
+        composeRule.onNodeWithText("내가 본 레시피").fetchSemanticsNode()
+        composeRule.onNodeWithText("설정").performClick()
+        composeRule.onNodeWithText("음성 안내").fetchSemanticsNode()
+
+        pressBack()
+        composeRule.onNodeWithText("레시피 스크랩").fetchSemanticsNode()
+        pressBack()
+        composeRule.onNodeWithText("오늘은 무엇을 만들까요?").fetchSemanticsNode()
+    }
+
+    @Test
+    fun homeBookmarkScrapsRecipeAndShowsItOnMyPage() {
+        val wasScrapped = composeRule
+            .onAllNodesWithContentDescription("스크랩 해제: 소세지야채볶음")
+            .fetchSemanticsNodes()
+            .isNotEmpty()
+        if (wasScrapped) {
+            composeRule.onNodeWithContentDescription("스크랩 해제: 소세지야채볶음").performClick()
+        }
+        composeRule.onNodeWithContentDescription("스크랩 추가: 소세지야채볶음").performClick()
+        composeRule.onNodeWithContentDescription("스크랩 해제: 소세지야채볶음").fetchSemanticsNode()
+
+        composeRule.onNodeWithText("마이").performClick()
+        composeRule.onNodeWithText("레시피 스크랩").performClick()
+        composeRule.onNodeWithText("소세지야채볶음").fetchSemanticsNode()
+
+        pressBack()
+        pressBack()
+        if (!wasScrapped) {
+            composeRule.onNodeWithContentDescription("스크랩 해제: 소세지야채볶음").performClick()
+            composeRule.onNodeWithContentDescription("스크랩 추가: 소세지야채볶음").fetchSemanticsNode()
+        }
+    }
+
+    @Test
+    fun openingRecipeImmediatelyAddsItToViewedRecipes() {
+        composeRule.onNodeWithContentDescription("우삼겹 파스타 레시피 카드").performClick()
+        composeRule.onNodeWithText("우삼겹 파스타").fetchSemanticsNode()
+
+        pressBack()
+        composeRule.onNodeWithText("마이").performClick()
+        composeRule.onNodeWithText("내가 본 레시피").performClick()
+
+        composeRule.onNodeWithText("우삼겹 파스타").fetchSemanticsNode()
+    }
+
+    @Test
+    fun presentationCardUsesScriptedPhotoWithTheSameAutomaticControls() {
+        composeRule
+            .onNodeWithContentDescription("소세지 야채볶음 발표용 레시피 카드")
+            .performScrollTo()
+            .performClick()
+
+        composeRule.onNodeWithText("레시피 상세").fetchSemanticsNode()
+        composeRule.onNodeWithText("요리 시작").performClick()
+        composeRule.onNodeWithText("AI 글래스를 준비할게요").fetchSemanticsNode()
+        composeRule.onNodeWithText("1단계 시작").performClick()
+        composeRule.onNodeWithText("확인해줘").fetchSemanticsNode()
+
+        assertTrue(
+            composeRule.onAllNodesWithContentDescription("1단계 최근 촬영")
+                .fetchSemanticsNodes()
+                .isEmpty()
+        )
+        composeRule.onNodeWithText("확인해줘").performClick()
+        composeRule.onNodeWithContentDescription("1단계 최근 촬영").fetchSemanticsNode()
+        val rootWidth = composeRule.onRoot().fetchSemanticsNode().boundsInRoot.width
+        val exampleWidth = composeRule.onNodeWithContentDescription("단계 예시 사진")
+            .fetchSemanticsNode().boundsInRoot.width
+        val captureWidth = composeRule.onNodeWithContentDescription("1단계 최근 촬영")
+            .fetchSemanticsNode().boundsInRoot.width
+        assertTrue(exampleWidth <= rootWidth * 0.65f)
+        assertTrue(captureWidth <= rootWidth * 0.65f)
+        composeRule.onNodeWithText("다음").performClick()
+        composeRule.onNodeWithText("확인해줘").fetchSemanticsNode()
+        assertTrue(
+            composeRule.onAllNodesWithContentDescription("2단계 최근 촬영")
+                .fetchSemanticsNodes()
+                .isEmpty()
+        )
+        composeRule.onNodeWithText("확인해줘").performClick()
+        composeRule.onNodeWithContentDescription("2단계 최근 촬영").fetchSemanticsNode()
+
+        for (step in 2..5) {
+            if (step > 2) {
+                composeRule.onNodeWithText("확인해줘").performClick()
+                composeRule.onNodeWithContentDescription("${step}단계 최근 촬영").fetchSemanticsNode()
+            }
+            if (step == 4) {
+                assertTrue(
+                    composeRule.onAllNodesWithText("완료 기준")
+                        .fetchSemanticsNodes()
+                        .isEmpty()
+                )
+            }
+            composeRule.onNodeWithText("다음").performClick()
+        }
+
+        composeRule.onNodeWithText("단계별 사진").performScrollTo()
+        composeRule.onNodeWithContentDescription("1단계 사진").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("5단계 사진").fetchSemanticsNode()
     }
 }
