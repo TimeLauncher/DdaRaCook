@@ -2,13 +2,16 @@ package com.example.myapplication
 
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.percentOffset
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -21,6 +24,17 @@ import org.junit.runner.RunWith
 class RecipeEditorNavigationTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    @Test
+    fun bottomNavigationGapConsumesTapWithoutOpeningContentBehindIt() {
+        composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
+
+        composeRule.onNodeWithContentDescription("하단 탐색 영역").performTouchInput {
+            click(percentOffset(0.25f, 0.5f))
+        }
+
+        composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
+    }
 
     @Test
     fun homeOpensRecipeEditorAndSystemBackReturnsHome() {
