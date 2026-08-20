@@ -900,10 +900,6 @@ internal fun FigmaCookingScreen(
             }
 
             Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
-                Text("지금 할 일", color = FigmaOrange, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(8.dp))
-                Text(step.instruction, color = FigmaInk, fontSize = 23.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
                 Text(inspectionMessage(uiState, step), color = FigmaMuted, fontSize = 12.sp)
                 Spacer(Modifier.height(8.dp))
                 Row(

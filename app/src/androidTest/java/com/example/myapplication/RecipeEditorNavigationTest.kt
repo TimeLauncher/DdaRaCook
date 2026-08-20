@@ -99,6 +99,7 @@ class RecipeEditorNavigationTest {
         composeRule.onNodeWithText("AI 글래스를 준비할게요").fetchSemanticsNode()
         composeRule.onNodeWithText("1단계 시작").performClick()
         composeRule.onNodeWithText("확인해줘").fetchSemanticsNode()
+        assertTrue(composeRule.onAllNodesWithText("지금 할 일").fetchSemanticsNodes().isEmpty())
 
         assertTrue(
             composeRule.onAllNodesWithContentDescription("1단계 최근 촬영")
