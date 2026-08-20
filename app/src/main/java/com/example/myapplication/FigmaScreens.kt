@@ -825,7 +825,7 @@ internal fun FigmaCookingScreen(
                     stepOrder = step.order,
                     hasComparisonMedia = showCompletionComparison
                 )
-                if (showCompletionComparison) {
+                if (showCompletionCriteria) {
                     Text("눈으로 비교해보세요", color = FigmaInk, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(12.dp))
                 }

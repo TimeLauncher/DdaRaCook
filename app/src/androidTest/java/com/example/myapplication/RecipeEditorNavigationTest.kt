@@ -117,5 +117,16 @@ class RecipeEditorNavigationTest {
             .fetchSemanticsNode().boundsInRoot.width
         assertTrue(exampleWidth <= rootWidth * 0.65f)
         assertTrue(captureWidth <= rootWidth * 0.65f)
+
+        composeRule.waitUntil(timeoutMillis = 16_000L) {
+            composeRule.onAllNodesWithContentDescription("4단계 최근 촬영")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        assertTrue(
+            composeRule.onAllNodesWithText("눈으로 비교해보세요")
+                .fetchSemanticsNodes()
+                .isEmpty()
+        )
     }
 }
