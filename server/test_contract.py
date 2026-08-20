@@ -11,7 +11,11 @@ import server
 
 
 client = TestClient(server.app)
-AUTH = {"Authorization": "Bearer contract-test-token"}
+# 토큰을 문자열로 박아두면 안 된다. 같은 프로세스에서 먼저 돈 테스트가
+# .env 를 읽어버리면 (judge/__init__.py·eval.py·test_api.py 모두 load_dotenv 를
+# 부른다) 위 setdefault 가 무시되고 실제 토큰이 남아 인증이 401 로 어긋난다.
+# test_api.py 와 같이 서버가 실제로 쓰는 값에서 만든다.
+AUTH = {"Authorization": f"Bearer {server.TEAM_TOKEN}"}
 VALID_BODY = {
     "requestId": "request-1",
     "recipeId": "recipe-1",
