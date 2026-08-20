@@ -45,6 +45,7 @@ private const val CAMERA_PHOTO_CAPTURE_TIMEOUT_MS = 20_000L
 private const val MAX_VIEWED_RECIPE_COUNT = 30
 private const val MANUAL_ADVANCE_BASELINE_DELAY_SECONDS = 5
 private const val PRESENTATION_CAPTURE_REVEAL_DELAY_MS = 3_000L
+private const val PRESENTATION_PAGE_ADVANCE_DELAY_MS = 700L
 
 class CookingSessionViewModel(
     application: Application
@@ -102,6 +103,7 @@ class CookingSessionViewModel(
     private var elapsedTickerJob: Job? = null
     private var autoAdvanceJob: Job? = null
     private var presentationCaptureRevealJob: Job? = null
+    private var presentationPageAdvanceJob: Job? = null
     private var pendingManualInspectionStepOrder: Int? = null
     private var lastNextCommandAtMs = 0L
 
@@ -157,6 +159,7 @@ class CookingSessionViewModel(
                 presentationCaptureVisible = false
             )
         }
+        schedulePresentationPageAdvance(::openPresentationSimulationDevicePreparation)
     }
 
     fun openPresentationSimulationDevicePreparation() {
@@ -194,6 +197,7 @@ class CookingSessionViewModel(
                 presentationCaptureVisible = false
             )
         }
+        schedulePresentationPageAdvance(::startPresentationSimulation)
     }
 
     fun startPresentationSimulation() {
@@ -244,6 +248,7 @@ class CookingSessionViewModel(
         presentationCaptureRevealJob?.cancel()
         presentationCaptureRevealJob = null
         mutableUiState.update { it.copy(presentationCaptureVisible = true) }
+        schedulePresentationPageAdvance(::continuePresentationSimulation)
     }
 
     fun continuePresentationSimulation() {
@@ -254,6 +259,8 @@ class CookingSessionViewModel(
         }
         presentationCaptureRevealJob?.cancel()
         presentationCaptureRevealJob = null
+        presentationPageAdvanceJob?.cancel()
+        presentationPageAdvanceJob = null
         val recipe = state.selectedRecipe ?: return
         val session = state.session ?: return
         val now = System.currentTimeMillis()
@@ -2003,6 +2010,8 @@ class CookingSessionViewModel(
         autoAdvanceJob = null
         presentationCaptureRevealJob?.cancel()
         presentationCaptureRevealJob = null
+        presentationPageAdvanceJob?.cancel()
+        presentationPageAdvanceJob = null
     }
 
     private fun schedulePresentationCaptureReveal() {
@@ -2012,6 +2021,7 @@ class CookingSessionViewModel(
         presentationCaptureRevealJob = viewModelScope.launch {
             delay(PRESENTATION_CAPTURE_REVEAL_DELAY_MS)
             val current = uiState.value
+            var captureRevealed = false
             if (
                 current.isPresentationSimulation &&
                 current.currentScreen == AppScreen.S5_COOKING &&
@@ -2019,8 +2029,21 @@ class CookingSessionViewModel(
                 current.currentStep?.order == expectedStepOrder
             ) {
                 mutableUiState.update { it.copy(presentationCaptureVisible = true) }
+                captureRevealed = true
             }
             presentationCaptureRevealJob = null
+            if (captureRevealed) {
+                schedulePresentationPageAdvance(::continuePresentationSimulation)
+            }
+        }
+    }
+
+    private fun schedulePresentationPageAdvance(action: () -> Unit) {
+        presentationPageAdvanceJob?.cancel()
+        presentationPageAdvanceJob = viewModelScope.launch {
+            delay(PRESENTATION_PAGE_ADVANCE_DELAY_MS)
+            presentationPageAdvanceJob = null
+            action()
         }
     }
 
