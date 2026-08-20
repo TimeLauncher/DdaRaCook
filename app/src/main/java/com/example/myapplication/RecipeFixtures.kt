@@ -202,6 +202,89 @@ object RecipeFixtures {
                 )
             ),
             Recipe(
+                id = "kimchi",
+                title = "김치볶음밥",
+                heroNote = "정적 예시 · 6단계 레시피",
+                isMvpReady = false,
+                ingredients = listOf(
+                    Ingredient("김치", "1컵"),
+                    Ingredient("밥", "2공기"),
+                    Ingredient("양파", "1/2개"),
+                    Ingredient("대파", "1대"),
+                    Ingredient("계란", "2개"),
+                    Ingredient("참기름", "약간")
+                ),
+                steps = listOf(
+                    RecipeStep(
+                        order = 1,
+                        instruction = "팬에 기름을 두르고 달군다",
+                        checkType = CheckType.STATE_TRANSITION,
+                        checkCondition = "팬 표면에 기름이 얇게 퍼지고 열이 올라왔는가",
+                        needsStartImage = false,
+                        inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 60),
+                        targetIngredients = listOf("팬", "식용유"),
+                        voicePrompt = "1단계. 팬에 기름을 두르고 달구세요.",
+                        isAutoCheck = true
+                    ),
+                    RecipeStep(
+                        order = 2,
+                        instruction = "양파를 넣는다",
+                        checkType = CheckType.PRESENCE,
+                        checkCondition = "팬 안에 양파가 들어왔는가",
+                        needsStartImage = false,
+                        inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 60),
+                        targetIngredients = listOf("양파"),
+                        voicePrompt = "2단계. 양파를 팬에 넣으세요.",
+                        isAutoCheck = true
+                    ),
+                    RecipeStep(
+                        order = 3,
+                        instruction = "양파가 반투명해질 때까지 볶는다",
+                        checkType = CheckType.COLOR_CHANGE,
+                        checkCondition = "시작 시점 사진과 비교해 팬 안의 양파가 흰색에서 반투명 상태로 변했는가",
+                        needsStartImage = true,
+                        inspectionPolicy = InspectionPolicy(30, 30, 3, 2, 360),
+                        targetIngredients = listOf("양파"),
+                        voicePrompt = "3단계. 양파가 반투명해질 때까지 볶으세요.",
+                        isAutoCheck = true,
+                        baselineOnStepStart = true
+                    ),
+                    RecipeStep(
+                        order = 4,
+                        instruction = "김치를 넣고 볶는다",
+                        checkType = CheckType.IDENTIFICATION,
+                        checkCondition = "팬 안에 김치가 들어가 볶아지고 있는가",
+                        needsStartImage = false,
+                        inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 180),
+                        targetIngredients = listOf("김치"),
+                        voicePrompt = "4단계. 김치를 넣고 볶으세요.",
+                        isAutoCheck = true
+                    ),
+                    RecipeStep(
+                        order = 5,
+                        instruction = "밥을 넣고 김치와 섞는다",
+                        checkType = CheckType.PRESENCE,
+                        checkCondition = "밥이 팬 안에서 김치와 섞이고 있는가",
+                        needsStartImage = false,
+                        inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 240),
+                        targetIngredients = listOf("밥"),
+                        voicePrompt = "5단계. 밥을 넣고 고르게 섞으세요.",
+                        isAutoCheck = true
+                    ),
+                    RecipeStep(
+                        order = 6,
+                        instruction = "참기름을 넣고 마무리한다",
+                        checkType = CheckType.TIMER_ONLY,
+                        checkCondition = null,
+                        needsStartImage = false,
+                        inspectionPolicy = InspectionPolicy(30, 20, 2, 1, 120),
+                        targetIngredients = listOf("참기름"),
+                        voicePrompt = "6단계. 참기름을 넣고 마무리하세요.",
+                        isAutoCheck = false
+                    )
+                )
+            ),
+            Recipe(
                 id = "doenjang",
                 title = "된장찌개",
                 heroNote = "정적 예시 · 시연 대상 아님",

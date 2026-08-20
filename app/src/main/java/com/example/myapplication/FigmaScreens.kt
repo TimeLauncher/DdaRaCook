@@ -105,8 +105,8 @@ private fun figmaSummaryStepImageResource(recipe: Recipe, stepOrder: Int): Int? 
         return null
     }
     return when (stepOrder) {
-        1 -> R.drawable.sausage_step_1
-        2 -> R.drawable.sausage_step_2
+        1 -> R.drawable.sausage_step_1_replacement
+        2 -> R.drawable.sausage_step_2_replacement
         3 -> R.drawable.sausage_step_5
         4 -> R.drawable.sausage_step_6
         5 -> R.drawable.sausage_step_7
@@ -246,6 +246,8 @@ private fun FigmaNavItem(icon: Int, label: String, selected: Boolean, onClick: (
 @Composable
 internal fun FigmaRecipeDetailScreen(recipe: Recipe, onBack: () -> Unit, onStart: () -> Unit, onEdit: () -> Unit) {
     val errors = recipe.validationErrors()
+    var ingredientsExpanded by remember(recipe.id) { mutableStateOf(false) }
+    var stepsExpanded by remember(recipe.id) { mutableStateOf(false) }
     Scaffold(
         containerColor = Color.White,
         bottomBar = {
@@ -273,9 +275,22 @@ internal fun FigmaRecipeDetailScreen(recipe: Recipe, onBack: () -> Unit, onStart
                     FigmaChip("${recipe.steps.size}단계")
                 }
                 Spacer(Modifier.height(12.dp))
-                FigmaInfoBlock("재료", recipe.ingredients.joinToString(" · ") { "${it.name} ${it.amount}" })
+                FigmaListInfoBlock(
+                    title = "재료",
+                    rows = recipe.ingredients.map { "${it.name}  ${it.amount}" },
+                    expanded = ingredientsExpanded,
+                    onToggle = { ingredientsExpanded = !ingredientsExpanded }
+                )
                 Spacer(Modifier.height(10.dp))
-                FigmaInfoBlock("요리 순서", recipe.steps.joinToString("\n") { "${it.order}  ${it.instruction}" })
+                HorizontalDivider(thickness = 0.5.dp, color = FigmaDivider)
+                Spacer(Modifier.height(10.dp))
+                FigmaListInfoBlock(
+                    title = "요리 순서",
+                    rows = recipe.steps.map { it.instruction },
+                    leadingLabels = recipe.steps.map { "${it.order}단계" },
+                    expanded = stepsExpanded,
+                    onToggle = { stepsExpanded = !stepsExpanded }
+                )
                 if (errors.isNotEmpty()) {
                     Spacer(Modifier.height(10.dp))
                     Text(errors.joinToString("\n"), color = Color(0xFFC78500), fontSize = 11.sp)
@@ -1379,6 +1394,82 @@ private fun FigmaInfoBlock(title: String, body: String) {
         Text(title, color = FigmaInk, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         Spacer(Modifier.height(8.dp))
         Text(body, color = FigmaMuted, fontSize = 12.sp, lineHeight = 21.sp)
+    }
+}
+
+@Composable
+private fun FigmaListInfoBlock(
+    title: String,
+    rows: List<String>,
+    leadingLabels: List<String>? = null,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.White)
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onToggle)
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "[$title]",
+                color = FigmaInk,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                if (expanded) "접기  ▲" else "펼치기  ▼",
+                color = FigmaOrange,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+        if (expanded) {
+            Spacer(Modifier.height(12.dp))
+            rows.forEachIndexed { index, row ->
+                val leadingLabel = leadingLabels?.getOrNull(index)
+                if (leadingLabel == null) {
+                    Text(row, color = FigmaMuted, fontSize = 14.sp, lineHeight = 25.sp)
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Text(
+                            leadingLabel,
+                            color = FigmaInk,
+                            fontSize = 14.sp,
+                            lineHeight = 25.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.width(54.dp)
+                        )
+                        Text(
+                            row,
+                            color = FigmaMuted,
+                            fontSize = 14.sp,
+                            lineHeight = 25.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                if (index < rows.lastIndex) {
+                    Spacer(Modifier.height(9.dp))
+                    HorizontalDivider(thickness = 0.5.dp, color = FigmaDivider)
+                    Spacer(Modifier.height(9.dp))
+                }
+            }
+        }
     }
 }
 

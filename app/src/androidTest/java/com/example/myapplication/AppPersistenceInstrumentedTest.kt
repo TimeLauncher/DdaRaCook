@@ -107,6 +107,7 @@ class AppPersistenceInstrumentedTest {
 
         assertEquals("sausage-vegetable-stir-fry", migrated.first().id)
         assertEquals(5, migrated.first().steps.size)
+        assertEquals(6, migrated.first { it.id == "kimchi" }.steps.size)
         assertEquals(false, migrated.first { it.id == "doenjang" }.isMvpReady)
         assertNotNull(migrated.firstOrNull { it.id == "custom-recipe" })
         assertEquals(null, persistence.loadSession())
