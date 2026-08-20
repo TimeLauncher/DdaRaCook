@@ -78,6 +78,10 @@ class FakeJudgmentGatewayTest {
 
         val staticSample = recipes.first { it.id == "doenjang" }
         assertTrue(!staticSample.isMvpReady)
+        val kimchi = recipes.first { it.id == "kimchi" }
+        assertEquals("김치볶음밥", kimchi.title)
+        assertEquals(6, kimchi.steps.size)
+        assertTrue(!kimchi.isMvpReady)
     }
 
     @Test
