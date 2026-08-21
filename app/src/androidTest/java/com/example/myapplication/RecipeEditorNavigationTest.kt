@@ -40,7 +40,7 @@ class RecipeEditorNavigationTest {
     fun homeOpensRecipeEditorAndSystemBackReturnsHome() {
         composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
         composeRule.onNodeWithText("레시피").performClick()
-        composeRule.onNodeWithText("내 레시피").fetchSemanticsNode()
+        composeRule.onNodeWithContentDescription("레시피 목록 제목").fetchSemanticsNode()
         composeRule.onNodeWithContentDescription("소세지야채볶음 대표 이미지").fetchSemanticsNode()
         composeRule.onNodeWithText("추가").assertHeightIsAtLeast(48.dp)
         composeRule.onNodeWithText("추가").performClick()

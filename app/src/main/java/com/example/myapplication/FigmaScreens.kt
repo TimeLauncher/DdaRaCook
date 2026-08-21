@@ -434,7 +434,13 @@ internal fun FigmaRecipeScreen(
             }
 
             Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp)) {
-                Text("내 레시피", color = FigmaInk, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "레시피",
+                    color = FigmaInk,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.semantics { contentDescription = "레시피 목록 제목" }
+                )
                 Spacer(Modifier.height(10.dp))
                 if (uiState.recipes.isEmpty() && !uiState.isLoading) {
                     FigmaMessageCard("저장된 레시피가 없어요", "아래 추가 버튼으로 첫 레시피를 만들어 보세요.")
