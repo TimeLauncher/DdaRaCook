@@ -43,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -74,6 +75,7 @@ import com.example.myapplication.judgment.ImageNormalizer
 import com.example.myapplication.voice.WakeWordStatus
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private val FigmaOrange = Color(0xFFF0872D)
@@ -371,6 +373,8 @@ internal fun FigmaRecipeScreen(
     onResume: () -> Unit
 ) {
     val presentationCard = PresentationSimulation.homeCard(uiState.recipes)
+    val youtubeDemoRecipe = uiState.recipes.firstOrNull { it.id == "kimchi" }
+        ?: uiState.recipes.firstOrNull()
     val homeRecipes = buildList {
         uiState.recipes.forEach { recipe ->
             add(recipe)
@@ -404,6 +408,13 @@ internal fun FigmaRecipeScreen(
                 CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(32.dp), color = FigmaOrange)
             } else if (uiState.loadError != null) {
                 FigmaMessageCard("레시피를 불러오지 못했습니다", uiState.loadError, Modifier.padding(20.dp))
+            }
+
+            Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp)) {
+                FigmaYoutubeRecipeDemoCard(
+                    recipe = youtubeDemoRecipe,
+                    onOpenRecipe = { youtubeDemoRecipe?.let { onRecipeClick(it.id) } }
+                )
             }
 
             if (uiState.hasResumableSession && uiState.session != null && uiState.selectedRecipe != null) {
@@ -480,6 +491,182 @@ internal fun FigmaRecipeScreen(
             onAddRecipe = onAddRecipe,
             onMy = onMy
         )
+    }
+}
+
+private enum class YoutubeRecipeDemoStage { INPUT, ANALYZING, RESULT }
+
+@Composable
+private fun FigmaYoutubeRecipeDemoCard(
+    recipe: Recipe?,
+    onOpenRecipe: () -> Unit
+) {
+    var url by remember { mutableStateOf("") }
+    var stage by remember { mutableStateOf(YoutubeRecipeDemoStage.INPUT) }
+    val validUrl = url.startsWith("https://") &&
+        (url.contains("youtube.com", ignoreCase = true) || url.contains("youtu.be", ignoreCase = true))
+
+    LaunchedEffect(stage) {
+        if (stage == YoutubeRecipeDemoStage.ANALYZING) {
+            delay(1_800L)
+            stage = YoutubeRecipeDemoStage.RESULT
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color(0xFFFFF6EE))
+            .border(1.dp, Color(0xFFFFD8B8), RoundedCornerShape(22.dp))
+            .padding(16.dp)
+            .semantics { contentDescription = "유튜브 레시피 데모" }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFFFF0033)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("▶", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text("YouTube 레시피", color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "DEMO",
+                        color = FigmaOrange,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(Color.White)
+                            .padding(horizontal = 7.dp, vertical = 4.dp)
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Text("영상 링크로 재료와 조리 단계를 만들어요", color = FigmaMuted, fontSize = 10.sp)
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        when (stage) {
+            YoutubeRecipeDemoStage.INPUT -> {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it.trim() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "YouTube 영상 링크 입력" },
+                    label = { Text("YouTube 영상 링크", fontSize = 11.sp) },
+                    placeholder = { Text("https://youtu.be/...", fontSize = 11.sp) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedIndicatorColor = FigmaOrange,
+                        unfocusedIndicatorColor = FigmaDivider
+                    )
+                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { url = "https://youtu.be/ttaracook-demo" }) {
+                        Text("데모 링크 불러오기", color = FigmaOrange, fontSize = 10.sp)
+                    }
+                    Text("자막과 장면을 함께 분석해요", color = FigmaMuted, fontSize = 9.sp)
+                }
+                Button(
+                    onClick = { stage = YoutubeRecipeDemoStage.ANALYZING },
+                    enabled = validUrl && recipe != null,
+                    modifier = Modifier.fillMaxWidth().height(46.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = FigmaOrange,
+                        disabledContainerColor = Color(0xFFE2E2E2)
+                    )
+                ) {
+                    Text("레시피 추출하기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            YoutubeRecipeDemoStage.ANALYZING -> {
+                Column(
+                    Modifier.fillMaxWidth().height(112.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator(color = FigmaOrange, modifier = Modifier.size(30.dp), strokeWidth = 3.dp)
+                    Spacer(Modifier.height(10.dp))
+                    Text("영상에서 레시피를 찾고 있어요", color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("자막 · 재료 · 조리 장면 분석 중", color = FigmaMuted, fontSize = 10.sp)
+                }
+            }
+
+            YoutubeRecipeDemoStage.RESULT -> {
+                if (recipe == null) {
+                    FigmaMessageCard("레시피를 만들 수 없어요", "기본 레시피를 먼저 불러와 주세요.")
+                } else {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(112.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.White)
+                    ) {
+                        Box(Modifier.width(126.dp).height(112.dp)) {
+                            FigmaResourceImage(
+                                figmaHomeRecipeImageResource(recipe, R.drawable.kimchi_fried_rice),
+                                "추출된 ${recipe.title} 대표 이미지",
+                                Modifier.fillMaxSize(),
+                                0.dp
+                            )
+                            Box(
+                                Modifier.align(Alignment.Center).size(34.dp).clip(CircleShape).background(Color(0xDDFF0033)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("▶", color = Color.White, fontSize = 12.sp)
+                            }
+                        }
+                        Column(Modifier.weight(1f).padding(12.dp)) {
+                            Text("● 영상 분석 완료", color = FigmaGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(5.dp))
+                            Text(recipe.title, color = FigmaInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "재료 ${recipe.ingredients.size}개 · ${recipe.steps.size}단계 · ${recipe.totalDurationLabel}",
+                                color = FigmaMuted,
+                                fontSize = 9.sp
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text("YouTube 영상에서 추출", color = FigmaOrange, fontSize = 9.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = onOpenRecipe,
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = FigmaOrange)
+                    ) {
+                        Text("레시피 확인하고 요리하기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    TextButton(
+                        onClick = {
+                            url = ""
+                            stage = YoutubeRecipeDemoStage.INPUT
+                        },
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        Text("다른 영상 불러오기", color = FigmaMuted, fontSize = 10.sp)
+                    }
+                }
+            }
+        }
     }
 }
 

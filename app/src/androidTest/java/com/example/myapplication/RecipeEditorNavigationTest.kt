@@ -37,6 +37,23 @@ class RecipeEditorNavigationTest {
     }
 
     @Test
+    fun youtubeRecipeDemoExtractsPreviewAndOpensCookableRecipe() {
+        composeRule.onNodeWithText("레시피").performClick()
+        composeRule.onNodeWithContentDescription("유튜브 레시피 데모").fetchSemanticsNode()
+        composeRule.onNodeWithText("데모 링크 불러오기").performClick()
+        composeRule.onNodeWithText("레시피 추출하기").performClick()
+
+        composeRule.waitUntil(timeoutMillis = 4_000L) {
+            composeRule.onAllNodesWithText("영상 분석 완료", substring = true)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        composeRule.onNodeWithText("레시피 확인하고 요리하기").performClick()
+        composeRule.onNodeWithText("김치볶음밥").fetchSemanticsNode()
+        composeRule.onNodeWithText("요리 시작").fetchSemanticsNode()
+    }
+
+    @Test
     fun homeOpensRecipeEditorAndSystemBackReturnsHome() {
         composeRule.onNodeWithText("오늘 저녁, 준비됐나요?").fetchSemanticsNode()
         composeRule.onNodeWithText("레시피").performClick()
