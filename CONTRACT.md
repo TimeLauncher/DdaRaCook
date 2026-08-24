@@ -2,7 +2,7 @@
 
 > **이 문서는 지침입니다. 다만 여기 적힌 필드·URL·오류 코드는 앱과 서버가 동시에 맞아야 하는 배선입니다.**
 > 바꾸는 건 자유지만 **한쪽만 바꾸면 런타임에 깨집니다** — 앱과 서버를 같은 PR에서 고치고, 아래 변경 이력에 한 줄 남기세요.
-> 담당: 3번 · 사용: 2번(앱) · 버전 1.4
+> 담당: 3번 · 사용: 2번(앱) · 버전 1.5
 
 > ✅ **2026-08-10 (T1-4): 실제 AI 판정이 연결되었습니다.**
 > Mock 헤더(§6)는 그대로 살아 있으니 기존 테스트는 계속 쓰시면 됩니다.
@@ -15,6 +15,7 @@
 
 ```
 POST  {BASE_URL}/judge-step
+POST  {BASE_URL}/extract-recipe
 GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
 ```
 
@@ -241,7 +242,66 @@ X-Mock-Status:  503           ×3   → 수동 모드로 전환되면 안 됨 �
 
 ---
 
-## 7. 변경 이력
+## 7. YouTube 레시피 추출
+
+`POST /extract-recipe`는 공개 YouTube 영상의 자막을 읽어 앱 편집기에 넣을 `Recipe` 초안을 만듭니다.
+공통 헤더(§2)를 그대로 사용하며, 앱은 응답을 즉시 저장하지 않고 사용자가 검토·수정한 뒤 저장합니다.
+
+요청:
+
+```json
+{ "url": "https://www.youtube.com/watch?v=<video-id>" }
+```
+
+성공 응답의 `recipe`는 앱의 저장 모델과 같은 필드를 사용합니다. `checkType`만 판정 API 이름
+(`PRESENCE` · `COUNT` · `IDENTIFY` · `COLOR_CHANGE` · `STATE_CHANGE` · `TIME_ONLY`)으로 전송하고,
+앱이 저장 enum 이름으로 매핑합니다.
+
+```json
+{
+  "source": {
+    "videoId": "...",
+    "url": "https://www.youtube.com/watch?v=...",
+    "title": "영상 제목",
+    "transcriptLanguage": "ko"
+  },
+  "recipe": {
+    "id": "",
+    "title": "레시피 제목",
+    "ingredients": [{ "name": "양파", "amount": "1개" }],
+    "steps": [{
+      "order": 1,
+      "instruction": "양파를 썬다",
+      "checkType": "STATE_CHANGE",
+      "checkCondition": "통째로 남은 양파 덩어리가 없는가",
+      "needsStartImage": false,
+      "inspectionPolicy": {
+        "earliestCheckSeconds": 30,
+        "checkIntervalSeconds": 30,
+        "burstSeconds": 3,
+        "requiredConsecutiveDone": 1,
+        "maxExpectedSeconds": 180
+      },
+      "targetIngredients": ["양파"],
+      "voicePrompt": "양파를 썰어 주세요.",
+      "isAutoCheck": true,
+      "parallelTimer": null,
+      "waitsForParallelTimer": false,
+      "baselineOnStepStart": false
+    }],
+    "heroNote": "YouTube 자막에서 추출 · 저장 전 확인",
+    "isMvpReady": false
+  },
+  "warnings": ["자막에서 불 세기를 확인할 수 없습니다."]
+}
+```
+
+추가 실패 코드는 `422`(자막 없음·레시피 정보 부족)입니다. `400`·`401`·`403`·`429`·`500`·`503`은
+§5와 같은 형태인 `{ "detail": "사람이 읽을 수 있는 오류 설명" }`으로 반환합니다.
+
+---
+
+## 8. 변경 이력
 
 | 버전 | 날짜 | 변경 |
 |---|---|---|
@@ -250,6 +310,7 @@ X-Mock-Status:  503           ×3   → 수동 모드로 전환되면 안 됨 �
 | 1.2 | 2026-08-13 | §3.3 이미지 규격 확정 — 위 40% 제거 + 긴 변 1024 |
 | 1.3 | 2026-08-14 | **§3.2 개정** — `startImage` 정책을 `checkType` 기준에서 "완료 조건이 시작 대비 변화를 묻는가" 기준으로. 기준 사진은 단계 시작 15초 뒤 촬영 |
 | 1.4 | 2026-08-19 | **§3.3 개정** — 수동 모드는 크롭 없이 긴 변 1024px로만 축소. JPEG q80·회전 반영·EXIF 제거·sRGB는 공통 유지 |
+| 1.5 | 2026-08-24 | `/extract-recipe` 추가 — YouTube 자막을 현재 앱 `Recipe` 초안으로 변환하고 편집 후 저장 |
 
 > **1.1은 추가만 있고 변경·삭제가 없습니다.** 요청/응답 필드, URL, 인증 방식이
 > 그대로이므로 기존 클라이언트 코드는 수정 없이 동작합니다.

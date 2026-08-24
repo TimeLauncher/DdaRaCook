@@ -1,7 +1,7 @@
 # server/ — 판정 서버 (3번)
 
-명세서 8절의 "얇은 판정 서버". VLM API 키를 숨기고 `/judge-step` 하나만 중계합니다.
-**작업이나 세션을 시작할 때 이 문서를 먼저 읽습니다.** 최종 갱신 2026-08-14.
+명세서 8절의 "얇은 판정 서버". VLM API 키를 숨기고 `/judge-step` 판정과 `/extract-recipe` YouTube 레시피 초안 생성을 중계합니다.
+**작업이나 세션을 시작할 때 이 문서를 먼저 읽습니다.** 최종 갱신 2026-08-24.
 
 | 정본 | 무엇 |
 |---|---|
@@ -10,6 +10,7 @@
 | [`../요리어시스턴트_기능명세서.md`](../요리어시스턴트_기능명세서.md) | 기능 ID(`F4-3` 등) · 역할 분담 |
 | [`../docs/contract-compliance.md`](../docs/contract-compliance.md) | 미해결 위반 항목 — **작업 전 확인** |
 | [`notes/nemotron.md`](notes/nemotron.md) | 모델 선정 근거 · 지연 실측 |
+| [`notes/recipe-extraction-mvp.md`](notes/recipe-extraction-mvp.md) | YouTube 실영상 결과 · 회귀 기준선 · 다음 개선 우선순위 |
 | [`3번_AI서버_실행계획.md`](3번_AI서버_실행계획.md) | T0~T3 태스크 정의 |
 | `3번_진행상황_해설서.md` · `3번_파트_해설서.md` | 코드 단위 해설 (공부용) |
 
@@ -82,7 +83,8 @@
 
 ```
 server/
-├── server.py              FastAPI · /judge-step · /health
+├── server.py              FastAPI · /judge-step · /extract-recipe · /health
+├── recipe_extractor.py    YouTube 자막 수집 · Recipe JSON 생성/검증
 ├── prompts.py             프롬프트 v1 (벤더 무관) · CHECK_TYPE_HINT
 ├── judge/
 │   ├── base.py            Verdict · Protocol · 관대한 JSON 파서
@@ -95,6 +97,7 @@ server/
 ├── imageprep.py           축소 · 크롭 · 색공간 (원본 불변)
 ├── inspect_image.py       이미지 규격 감사 (EXIF · ICC · 해상도)
 ├── test_*.py              파서 16케이스 · 계약 · 재시도
+├── notes/                 모델 조사 · YouTube 실영상 검증 기준선
 └── testdata/
     ├── raw/               안경 원본 — 수정 금지 · git 제외 (개인정보·용량)
     ├── images/            평가용 정규화본
@@ -112,6 +115,7 @@ python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
 
 python eval.py --selftest                     # 지표 검산 (사진·API 불필요)
 python test_parser.py                         # 파서 16케이스
+python test_recipe_extractor.py               # URL·Recipe 계약 (외부 호출 없음)
 python smoke.py --direct                      # 서버 없이 모델만
 python smoke.py --url http://127.0.0.1:8000   # HTTP 왕복 + 지연 분리
 python inspect_image.py testdata/raw/         # EXIF · ICC · 해상도 감사
@@ -151,6 +155,11 @@ Render 무료 티어. **`main`에 push하면 자동 재배포**됩니다(5~10분
 | `TEAM_TOKEN` | 로컬 `.env`와 **동일하게** — 다르면 앱이 403 |
 | `VLM_BACKEND` | `nemotron` |
 | `DEBUG_MODE` | `X-Mock-*` 헤더 스위치. **시연 전 `false`** (T3-1) · 지우면 안전한 쪽으로 떨어짐 |
+| `YOUTUBE_TRANSCRIPT_API_KEY` | 선택. Render 등에서 YouTube 직접 자막 요청이 막힐 때 호스팅 자막 API 키 |
+| `YOUTUBE_PROXY_URL` | 선택. 직접 자막 수집에 쓸 HTTP(S) 프록시. 위 API 키와 둘 중 하나만 있으면 됨 |
+| `RECIPE_EXTRACTION_MODEL` | 선택. 레시피 텍스트 구조화 모델(기본 `meta/llama-3.1-8b-instruct`) |
+| `RECIPE_EXTRACTION_TIMEOUT_S` | 선택. 레시피 모델 1회 호출 제한(기본 90초) |
+| `RECIPE_EXTRACTION_TIMEOUT_RETRIES` | 선택. 시간 초과에만 적용할 재시도 횟수(기본 1회) |
 
 | 증상 | 원인 |
 |---|---|
@@ -158,6 +167,7 @@ Render 무료 티어. **`main`에 push하면 자동 재배포**됩니다(5~10분
 | `/health`는 되는데 판정이 403 | `TEAM_TOKEN` 불일치 |
 | 판정이 500 | `NVIDIA_API_KEY` / `NVIDIA_MODEL` 누락 |
 | 판정이 503 | 모델 7.5초 초과. **`CANNOT_TELL`과 절대 섞지 않는다**(CONTRACT §5) |
+| 레시피 추출이 503이고 자막 차단 문구 | 클라우드 IP 차단. `YOUTUBE_TRANSCRIPT_API_KEY` 또는 `YOUTUBE_PROXY_URL` 설정 |
 
 ---
 
