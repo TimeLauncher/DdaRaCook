@@ -315,6 +315,11 @@ private fun TtaraCookApp(
 
                 AppScreen.S3_RECIPE_EDITOR -> FigmaRecipeEditorScreen(
                     existing = uiState.selectedRecipe,
+                    importedDraft = uiState.editorImportDraft,
+                    isImporting = uiState.isRecipeImporting,
+                    importError = uiState.recipeImportError,
+                    importWarnings = uiState.recipeImportWarnings,
+                    onImportYoutube = sessionViewModel::importRecipeFromYoutube,
                     onCancel = sessionViewModel::cancelRecipeEditor,
                     onSave = sessionViewModel::saveRecipe
                 )

@@ -21,6 +21,8 @@ import com.example.myapplication.judgment.JudgmentOutcome
 import com.example.myapplication.judgment.JudgmentRequest
 import com.example.myapplication.judgment.JudgeApiService
 import com.example.myapplication.judgment.shouldSendStartImage
+import com.example.myapplication.recipeimport.RecipeImportException
+import com.example.myapplication.recipeimport.YouTubeRecipeApiService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -54,6 +56,7 @@ class CookingSessionViewModel(
     }
     private val fakeJudgmentGateway = FakeJudgmentGateway()
     private val networkJudgmentGateway = JudgeApiService(application)
+    private val recipeImportService = YouTubeRecipeApiService()
     private val fixtureRecipes = RecipeFixtures.sampleRecipes().sortedByDescending(Recipe::isMvpReady)
     private val initialRecipes = persistence.loadRecipes(fixtureRecipes).withAutomaticInspectionInterval()
     private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
@@ -83,6 +86,7 @@ class CookingSessionViewModel(
     init {
         persistence.saveRecipes(initialRecipes)
         networkJudgmentGateway.updateBaseUrl(initialServerBaseUrl)
+        recipeImportService.updateBaseUrl(initialServerBaseUrl)
         if (!initialUseMockJudgment) checkServerHealth()
     }
 
@@ -92,6 +96,7 @@ class CookingSessionViewModel(
     private var baselineCaptureJob: Job? = null
     private var elapsedTickerJob: Job? = null
     private var autoAdvanceJob: Job? = null
+    private var recipeImportJob: Job? = null
     private var pendingManualInspectionStepOrder: Int? = null
     private var lastNextCommandAtMs = 0L
 
@@ -125,18 +130,59 @@ class CookingSessionViewModel(
 
     fun openRecipeEditor(recipeId: String? = null) {
         cancelInspectionWork()
+        recipeImportJob?.cancel()
         mutableUiState.update {
             it.copy(
                 selectedRecipeId = recipeId ?: "",
                 currentScreen = AppScreen.S3_RECIPE_EDITOR,
                 session = null,
-                hasResumableSession = false
+                hasResumableSession = false,
+                editorImportDraft = null,
+                isRecipeImporting = false,
+                recipeImportError = null,
+                recipeImportWarnings = emptyList()
             )
+        }
+    }
+
+    fun importRecipeFromYoutube(url: String) {
+        if (url.isBlank()) {
+            mutableUiState.update { it.copy(recipeImportError = "YouTube 링크를 입력해 주세요.") }
+            return
+        }
+        if (uiState.value.isRecipeImporting) return
+        recipeImportJob = viewModelScope.launch {
+            mutableUiState.update {
+                it.copy(
+                    isRecipeImporting = true,
+                    recipeImportError = null,
+                    recipeImportWarnings = emptyList()
+                )
+            }
+            try {
+                val result = recipeImportService.extract(url)
+                mutableUiState.update {
+                    it.copy(
+                        editorImportDraft = result.recipe,
+                        isRecipeImporting = false,
+                        recipeImportError = null,
+                        recipeImportWarnings = result.warnings
+                    )
+                }
+            } catch (error: RecipeImportException) {
+                mutableUiState.update {
+                    it.copy(
+                        isRecipeImporting = false,
+                        recipeImportError = error.message ?: "레시피를 추출하지 못했습니다."
+                    )
+                }
+            }
         }
     }
 
     fun saveRecipe(recipe: Recipe) {
         if (recipe.validationErrors().isNotEmpty()) return
+        recipeImportJob?.cancel()
         val normalized = recipe.copy(
             id = recipe.id.ifBlank { "recipe-${UUID.randomUUID()}" },
             steps = recipe.steps.mapIndexed { index, step -> step.copy(order = index + 1) }
@@ -150,14 +196,25 @@ class CookingSessionViewModel(
             it.copy(
                 recipes = recipes,
                 selectedRecipeId = normalized.id,
-                currentScreen = AppScreen.S2_RECIPE_DETAIL
+                currentScreen = AppScreen.S2_RECIPE_DETAIL,
+                editorImportDraft = null,
+                isRecipeImporting = false,
+                recipeImportError = null,
+                recipeImportWarnings = emptyList()
             )
         }
     }
 
     fun cancelRecipeEditor() {
+        recipeImportJob?.cancel()
         mutableUiState.update {
-            it.copy(currentScreen = if (it.selectedRecipeId.isBlank()) AppScreen.S1_HOME else AppScreen.S2_RECIPE_DETAIL)
+            it.copy(
+                currentScreen = if (it.selectedRecipeId.isBlank()) AppScreen.S1_HOME else AppScreen.S2_RECIPE_DETAIL,
+                editorImportDraft = null,
+                isRecipeImporting = false,
+                recipeImportError = null,
+                recipeImportWarnings = emptyList()
+            )
         }
     }
 
@@ -837,6 +894,7 @@ class CookingSessionViewModel(
             mutableUiState.update { it.copy(serverReady = false, serverStatusMessage = "http 또는 https 서버 주소를 입력해 주세요.") }
             return
         }
+        recipeImportService.updateBaseUrl(value)
         persistence.saveServerBaseUrl(value.trim().trimEnd('/'))
         checkServerHealth()
     }

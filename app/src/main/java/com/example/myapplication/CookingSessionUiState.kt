@@ -51,7 +51,11 @@ data class CookingSessionUiState(
     val loadError: String? = null,
     val serverReady: Boolean? = null,
     val serverStatusMessage: String? = null,
-    val serverBaseUrl: String = ""
+    val serverBaseUrl: String = "",
+    val editorImportDraft: Recipe? = null,
+    val isRecipeImporting: Boolean = false,
+    val recipeImportError: String? = null,
+    val recipeImportWarnings: List<String> = emptyList()
 ) {
     val selectedRecipe: Recipe?
         get() = recipes.firstOrNull { it.id == selectedRecipeId }
