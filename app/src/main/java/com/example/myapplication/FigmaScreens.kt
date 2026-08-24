@@ -761,16 +761,7 @@ internal fun FigmaMyScreen(
                             }
                         }
 
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FigmaMyStatCard(scrappedRecipes.size, "찜한 레시피", Color(0xFFFFEEE0), Color(0xFFCB6921), Modifier.weight(1f))
-                            FigmaMyStatCard(createdRecipes.size, "내 레시피", Color(0xFFEAF2FF), Color(0xFF3869A9), Modifier.weight(1f))
-                            FigmaMyStatCard(cookingRecordCount, "요리 기록", Color(0xFFEAF7E6), FigmaGreen, Modifier.weight(1f))
-                        }
-
-                        Column(Modifier.padding(horizontal = 16.dp)) {
+                        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp)) {
                             Text("요리 보관함", color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(9.dp))
                             FigmaMyLibraryRow("♡", "찜한 레시피", "${scrappedRecipes.size}개", { section = FigmaMySection.SCRAPS })
@@ -859,28 +850,6 @@ internal fun FigmaMyScreen(
             onMy = { section = FigmaMySection.OVERVIEW },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
-    }
-}
-
-@Composable
-private fun FigmaMyStatCard(
-    count: Int,
-    label: String,
-    background: Color,
-    accent: Color,
-    modifier: Modifier
-) {
-    Column(
-        modifier
-            .height(74.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(background),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(count.toString(), color = accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(3.dp))
-        Text(label, color = FigmaMuted, fontSize = 9.sp)
     }
 }
 
