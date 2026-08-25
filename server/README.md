@@ -32,8 +32,7 @@
 
 1. **T2-1 실기기 재촬영·라벨링** ← 지금 가장 값어치 있는 일
    쏘야 기준 [`testdata/raw/촬영목록_2회차.md`](testdata/raw/촬영목록_2회차.md). 폰 사진으로 낸 95.2%는 제품 검증이 아니다
-2. **제품 규격으로 재측정** — `python eval.py --crop-top 40 --long-edge 1024`
-   현재 CSV 최고 기록은 1280px·크롭 없음이다. 제품이 실제로 보내는 이미지의 점수는 아직 없다
+2. **YOLO crop 적용본으로 판정 정확도 재측정** — 앱/서버 ROI 배선은 완료. 독립 환경 이미지 수집은 보류
 3. **T2-3** 프롬프트 v1 → v2 — `STATE_CHANGE` 힌트가 1순위 (아래 ④)
 4. **G-2** `CONTRACT.md` §3.2 개정안 — `startImage` 정책을 checkType이 아니라
    "완료 조건이 시작 시점 대비 변화를 묻는가"에 걸도록
@@ -48,7 +47,7 @@
 **① 95.2%는 두 가지 의미에서 제품 숫자가 아니다**
 
 - **폰 사진** — `testdata/raw`의 18장. 명세서 §12 마지막 줄은 *"실제 DAT 스트림 또는 `capturePhoto()` 결과"*를 요구한다. 안경은 1인칭 시점·모션 블러·자동 노출이라 조건이 다르다
-- **1280px · 크롭 없음** — 제품은 위 40% 제거 + 긴 변 1024다(CONTRACT §3.3). `eval_history.csv`에 그 규격 행이 하나 있지만 **mock 백엔드**라 정확도 의미가 없다
+- **1280px · 크롭 없음** — 현재 제품은 자동 촬영 전체 시야를 서버로 보내 YOLO 도마/팬 ROI로 규격화한다(CONTRACT §3.3). 기존 CSV 최고 기록과 직접 비교할 수 없다
 
 → **이 숫자를 제품 검증으로 말하면 안 된다.** T2-1 이후 둘 다 다시 잰다.
 안경 연동 자체는 들어왔지만, 명세서 §10 W0의 나머지 항목(스트림 20회 연속, 왕복 3초)은 아직 내 실측 기록이 없다.
@@ -84,6 +83,9 @@
 ```
 server/
 ├── server.py              FastAPI · /judge-step · /extract-recipe · /health
+├── roi_cropper.py         ONNX ROI 추론 · 도마/팬 크롭 · bottom-60 fallback
+├── roi_crop.py            bbox 선택·crop 기하 순수 함수
+├── models/                운영용 고정-prompt ONNX와 재현 메모
 ├── recipe_extractor.py    YouTube 자막 수집 · Recipe JSON 생성/검증
 ├── prompts.py             프롬프트 v1 (벤더 무관) · CHECK_TYPE_HINT
 ├── judge/

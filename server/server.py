@@ -28,6 +28,7 @@ if sys.platform == "win32":
 load_dotenv()
 
 import prompts
+from roi_cropper import CropTarget, cropper_status, prepare_judge_image
 from recipe_extractor import (
     DEFAULT_RECIPE_EXTRACTION_MODEL,
     RecipeExtractionError,
@@ -87,6 +88,10 @@ class JudgeRequest(BaseModel):
     startImage: Optional[str] = Field(
         None, description="base64 JPEG. 비교가 필요한 유형에서만 전송")
     currentImage: str = Field(..., description="base64 JPEG")
+    cropTarget: Optional[CropTarget] = Field(
+        None,
+        description="Optional server crop request. Omitted means an old client already prepared the image.",
+    )
 
 
 class JudgeResponse(BaseModel):
@@ -251,6 +256,7 @@ def health():
             "proxyConfigured": bool(os.getenv("YOUTUBE_PROXY_URL")),
             "model": os.getenv("RECIPE_EXTRACTION_MODEL") or DEFAULT_RECIPE_EXTRACTION_MODEL,
         },
+        "roiCrop": cropper_status(),
     }
 
 
@@ -327,6 +333,20 @@ def judge_step(
 
     current_b64 = _validate_image(req.currentImage, "currentImage")
     start_b64 = _validate_image(req.startImage, "startImage") if req.startImage else None
+    try:
+        current_b64, current_crop = prepare_judge_image(current_b64, req.cropTarget)
+        if start_b64 is not None:
+            start_b64, start_crop = prepare_judge_image(start_b64, req.cropTarget)
+        else:
+            start_crop = None
+    except (OSError, ValueError) as error:
+        raise HTTPException(400, f"server crop image decode failed: {error}") from error
+    print(
+        f"[roi-crop] req={req.requestId} target={req.cropTarget or 'CLIENT_PREPARED'} "
+        f"current={current_crop.mode} "
+        f"start={start_crop.mode if start_crop else '-'}",
+        flush=True,
+    )
 
     try:
         judge = get_judge()

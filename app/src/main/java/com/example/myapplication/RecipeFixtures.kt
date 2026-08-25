@@ -23,6 +23,7 @@ object RecipeFixtures {
                 steps = listOf(
                     RecipeStep(
                         order = 1,
+                        imageCropTarget = ImageCropTarget.CUTTING_BOARD_ROI,
                         instruction = "야채를 먹기 좋은 크기로 자르고 소세지에 칼집을 낸다",
                         checkType = CheckType.STATE_TRANSITION,
                         checkCondition = "도마 위에 통째로 남은 야채 덩어리가 없는가",
@@ -34,6 +35,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 2,
+                        imageCropTarget = ImageCropTarget.LEGACY_BOTTOM_60,
                         instruction = "양념장을 만든다",
                         checkType = CheckType.TIMER_ONLY,
                         checkCondition = null,
@@ -47,6 +49,7 @@ object RecipeFixtures {
                     // 그 확정 시점이 다음 단계의 기준 사진이 된다 — 15초를 세지 않는다.
                     RecipeStep(
                         order = 3,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "팬에 기름을 두르고 야채와 소세지를 넣는다.",
                         checkType = CheckType.PRESENCE,
                         checkCondition = "팬 안에 소세지와 썬 야채가 들어있는가",
@@ -58,6 +61,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 4,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "야채와 소세지를 중약불로 볶는다",
                         checkType = CheckType.STATE_TRANSITION,
                         checkCondition = "시작 시점 사진과 비교해 소세지 칼집이 벌어졌는가",
@@ -70,6 +74,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 5,
+                        imageCropTarget = ImageCropTarget.LEGACY_BOTTOM_60,
                         instruction = "양념장을 넣고 약불로 3분간 볶는다",
                         checkType = CheckType.TIMER_ONLY,
                         checkCondition = null,
@@ -100,6 +105,7 @@ object RecipeFixtures {
                 steps = listOf(
                     RecipeStep(
                         order = 1,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "끓는 물에 스파게티면을 넣는다",
                         checkType = CheckType.PRESENCE,
                         checkCondition = "끓는 물에 스파게티면이 들어가 있는가",
@@ -118,6 +124,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 2,
+                        imageCropTarget = ImageCropTarget.CUTTING_BOARD_ROI,
                         instruction = "대파를 어슷 썰고 깻잎을 채 썬다",
                         checkType = CheckType.STATE_TRANSITION,
                         checkCondition = "도마 위에 통째로 남은 대파가 없는가",
@@ -131,6 +138,7 @@ object RecipeFixtures {
                     // 그 "다음"이 곧 기준 사진 시점이므로 다음 단계는 baselineOnStepStart 다.
                     RecipeStep(
                         order = 3,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "팬에 우삼겹과 대파를 넣는다",
                         checkType = CheckType.PRESENCE,
                         checkCondition = "팬에 우삼겹과 대파가 들어가 있는가",
@@ -142,6 +150,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 4,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "중불로 볶는다",
                         checkType = CheckType.COLOR_CHANGE,
                         checkCondition = "시작 시점 사진과 비교해 팬 안의 우삼겹에서 붉은 부분이 줄었는가",
@@ -154,6 +163,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 5,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "다진마늘·설탕·진간장·굴소스를 넣고 볶는다",
                         checkType = CheckType.PRESENCE,
                         checkCondition = "팬 안에 갈색 간장 양념이 들어가 있는가",
@@ -165,6 +175,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 6,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "삶아둔 스파게티면을 건져 팬에 넣는다",
                         checkType = CheckType.PRESENCE,
                         checkCondition = "면이 팬의 재료 위로 올라가 있는가",
@@ -178,6 +189,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 7,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "양념이 배도록 볶는다",
                         checkType = CheckType.COLOR_CHANGE,
                         checkCondition = "시작 시점 사진과 비교해 팬 안의 면이 흰색에서 갈색 양념색으로 물들었는가",
@@ -190,6 +202,7 @@ object RecipeFixtures {
                     ),
                     RecipeStep(
                         order = 8,
+                        imageCropTarget = ImageCropTarget.PAN_COOKING_ROI,
                         instruction = "깻잎과 후추를 올려 마무리한다",
                         checkType = CheckType.PRESENCE,
                         checkCondition = "완성된 파스타 위에 깻잎이 올라가 있는가",

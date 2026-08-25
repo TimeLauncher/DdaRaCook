@@ -581,7 +581,8 @@ class CookingSessionViewModel(
                         .coerceAtLeast(0),
                     baselineImageUri = session.baselineUriByStep[step.order],
                     currentImageUri = uriValue,
-                    imagePolicy = JudgmentImagePolicy.MANUAL_MODE
+                    imagePolicy = JudgmentImagePolicy.MANUAL_MODE,
+                    cropTarget = step.imageCropTarget
                 )
             )
             handleJudgmentOutcome(outcome)
@@ -1342,6 +1343,7 @@ class CookingSessionViewModel(
                         } ?: 0,
                         baselineImageUri = state.session?.baselineUriByStep?.get(step.order),
                         currentImageUri = outcome.artifact.imageUri,
+                        cropTarget = step.imageCropTarget,
                         imagePolicy = if (state.session?.mode == SessionMode.MANUAL_ONLY) {
                             JudgmentImagePolicy.MANUAL_MODE
                         } else {
