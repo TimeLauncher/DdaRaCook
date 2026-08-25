@@ -40,9 +40,60 @@ data class JudgmentResult(
     val reasonCode: ReasonCode,
     val roundTripMs: Long,
     val vlmLatencyMs: Long? = null,
+    val timing: JudgmentTimingBreakdown? = null,
     val requestedAtMs: Long = 0L,
     val respondedAtMs: Long = System.currentTimeMillis()
 )
+
+data class JudgmentTimingBreakdown(
+    val totalMs: Long,
+    val imagePreparationMs: Long,
+    val httpRoundTripMs: Long,
+    val responseParseMs: Long,
+    val retryBackoffMs: Long,
+    val serverHandlerMs: Long,
+    val serverValidationMs: Long,
+    val currentCropMs: Long,
+    val startCropMs: Long,
+    val cropTotalMs: Long,
+    val judgeSetupMs: Long,
+    val promptBuildMs: Long,
+    val vlmWallMs: Long,
+    val serverOtherMs: Long,
+    val transportAndFrameworkMs: Long,
+    val currentCropMode: String,
+    val startCropMode: String? = null,
+    val currentDetectionCount: Int = 0,
+    val startDetectionCount: Int? = null
+)
+
+data class CropPreviewTiming(
+    val totalMs: Long,
+    val imagePreparationMs: Long,
+    val httpRoundTripMs: Long,
+    val responseParseMs: Long,
+    val serverHandlerMs: Long,
+    val serverValidationMs: Long,
+    val cropMs: Long,
+    val serverOtherMs: Long,
+    val transportAndFrameworkMs: Long
+)
+
+data class CropPreviewResult(
+    val sourceImageUri: String,
+    val croppedImageBase64: String,
+    val cropMode: String,
+    val cropTarget: ImageCropTarget,
+    val detectionCount: Int,
+    val width: Int,
+    val height: Int,
+    val timing: CropPreviewTiming
+)
+
+sealed interface CropPreviewOutcome {
+    data class Success(val result: CropPreviewResult) : CropPreviewOutcome
+    data class Failure(val message: String) : CropPreviewOutcome
+}
 
 sealed interface JudgmentOutcome {
     data class Success(val result: JudgmentResult) : JudgmentOutcome

@@ -2,7 +2,7 @@
 
 > **이 문서는 지침입니다. 다만 여기 적힌 필드·URL·오류 코드는 앱과 서버가 동시에 맞아야 하는 배선입니다.**
 > 바꾸는 건 자유지만 **한쪽만 바꾸면 런타임에 깨집니다** — 앱과 서버를 같은 PR에서 고치고, 아래 변경 이력에 한 줄 남기세요.
-> 담당: 3번 · 사용: 2번(앱) · 버전 1.6
+> 담당: 3번 · 사용: 2번(앱) · 버전 1.7
 
 > ✅ **2026-08-10 (T1-4): 실제 AI 판정이 연결되었습니다.**
 > Mock 헤더(§6)는 그대로 살아 있으니 기존 테스트는 계속 쓰시면 됩니다.
@@ -15,6 +15,7 @@
 
 ```
 POST  {BASE_URL}/judge-step
+POST  {BASE_URL}/debug/crop-preview  # 인증 필요 · VLM 없이 서버 YOLO 결과 확인
 POST  {BASE_URL}/extract-recipe
 GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
 ```
@@ -125,7 +126,22 @@ fallback합니다. `cropTarget`을 생략한 v1.5 이하 앱은 이미 위 40%�
   "reasonCode": "VISIBLE_CHANGE",
   "vlmLatencyMs": 1840,
   "promptVersion": "v1",
-  "backend": "nemotron"
+  "backend": "nemotron",
+  "timing": {
+    "serverHandlerMs": 1925,
+    "validationMs": 3,
+    "currentCropMs": 74,
+    "startCropMs": 0,
+    "cropTotalMs": 74,
+    "judgeSetupMs": 0,
+    "promptBuildMs": 0,
+    "vlmWallMs": 1842,
+    "otherMs": 6,
+    "currentCropMode": "YOLO_ROI",
+    "startCropMode": null,
+    "currentDetectionCount": 3,
+    "startDetectionCount": null
+  }
 }
 ```
 
@@ -136,11 +152,24 @@ fallback합니다. `cropTarget`을 생략한 v1.5 이하 앱은 이미 위 40%�
 | `vlmLatencyMs` | int | **서버가 잰 모델 호출 시간** |
 | `promptVersion` | string | 평가 추적용 |
 | `backend` | string | 어느 모델이 판정했는지 |
+| `timing` | object \| null | 서버 구간별 지연과 실제 crop mode. 구버전 호환을 위해 앱은 생략을 허용 |
 
 > ⚠️ **앱은 모르는 `reasonCode` 값이 와도 크래시하지 않아야 합니다.** 미지의 값은 `OTHER`로 처리하세요.
 
-> ⚠️ **`vlmLatencyMs` ≠ 앱의 `roundTripMs`.** 서버가 잰 모델 시간과 앱이 잰 전체 왕복은 다른 값입니다.
-> 이름을 분리하지 않으면 평가할 때 반드시 섞입니다. 둘의 차이가 네트워크 구간입니다.
+> ⚠️ **`vlmLatencyMs` ≠ 앱의 `roundTripMs`.** 서버가 잰 모델 시간과 앱의 이미지 준비·재시도·HTTP·응답 해석을
+> 모두 포함한 총 체감시간은 다른 값입니다. `HTTP 왕복 - timing.serverHandlerMs`는 네트워크뿐 아니라
+> FastAPI 본문 파싱과 응답 직렬화도 포함하므로 앱에서는 `전송·프레임워크 추정`으로 표시합니다.
+
+### 4.1 Debug YOLO 크롭 미리보기
+
+`POST /debug/crop-preview`는 `Authorization`이 필요하며 VLM을 호출하지 않습니다.
+
+```json
+{ "image": "<base64 JPEG>", "cropTarget": "PAN_COOKING_ROI" }
+```
+
+응답은 실제 판정 직전 JPEG인 `croppedImage`와 `cropMode`, `detectionCount`, `width`, `height`,
+`timing(serverHandlerMs · validationMs · cropMs · otherMs)`을 반환합니다. 앱은 Debug 빌드에서만 이 기능을 노출합니다.
 
 ---
 
@@ -309,6 +338,7 @@ X-Mock-Status:  503           ×3   → 수동 모드로 전환되면 안 됨 �
 | 1.4 | 2026-08-19 | **§3.3 개정** — 수동 모드는 크롭 없이 긴 변 1024px로만 축소. JPEG q80·회전 반영·EXIF 제거·sRGB는 공통 유지 |
 | 1.5 | 2026-08-24 | `/extract-recipe` 추가 — YouTube 자막을 현재 앱 `Recipe` 초안으로 변환하고 편집 후 저장 |
 | 1.6 | 2026-08-25 | 선택 필드 `cropTarget` 추가 · 자동 카메라는 전체 프레임을 보내고 서버 YOLO가 도마/팬 ROI를 규격화 · 실패 시 기존 아래 60%로 fallback |
+| 1.7 | 2026-08-25 | `/debug/crop-preview` 추가 · `/judge-step`에 선택 응답 `timing` 추가 · 앱 총 지연을 전처리/HTTP/서버 검증/YOLO/VLM/기타로 분리 |
 
 > **1.1은 추가만 있고 변경·삭제가 없습니다.** 요청/응답 필드, URL, 인증 방식이
 > 그대로이므로 기존 클라이언트 코드는 수정 없이 동작합니다.

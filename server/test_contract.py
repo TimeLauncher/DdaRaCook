@@ -99,7 +99,7 @@ def test_real_route_forwards_crop_target_to_cropper():
 
     def fake_prepare(value, target):
         seen_targets.append(target)
-        return value, SimpleNamespace(mode="TEST_CROP")
+        return value, SimpleNamespace(mode="TEST_CROP", detection_count=2)
 
     old_prepare = server.prepare_judge_image
     old_get_judge = server.get_judge
@@ -121,6 +121,38 @@ def test_real_route_forwards_crop_target_to_cropper():
 
     assert response.status_code == 200
     assert seen_targets == ["CUTTING_BOARD_ROI"]
+    timing = response.json()["timing"]
+    assert timing["currentCropMode"] == "TEST_CROP"
+    assert timing["currentDetectionCount"] == 2
+    assert timing["serverHandlerMs"] >= timing["cropTotalMs"]
+
+
+def test_crop_preview_returns_exact_server_crop_without_vlm():
+    output = io.BytesIO()
+    Image.new("RGB", (100, 200), "white").save(output, "JPEG")
+    image_b64 = base64.b64encode(output.getvalue()).decode("ascii")
+
+    response = client.post(
+        "/debug/crop-preview",
+        headers=AUTH,
+        json={"image": image_b64, "cropTarget": "LEGACY_BOTTOM_60"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cropMode"] == "LEGACY_BOTTOM_60"
+    assert body["cropTarget"] == "LEGACY_BOTTOM_60"
+    assert body["width"] == 100
+    assert body["height"] == 120
+    assert body["timing"]["serverHandlerMs"] >= body["timing"]["cropMs"]
+
+
+def test_crop_preview_requires_authentication():
+    response = client.post(
+        "/debug/crop-preview",
+        json={"image": "AAAA", "cropTarget": "PAN_COOKING_ROI"},
+    )
+    assert response.status_code == 401
 
 
 def main() -> int:
@@ -133,6 +165,8 @@ def main() -> int:
         test_valid_crop_target_is_accepted,
         test_invalid_crop_target_is_400,
         test_real_route_forwards_crop_target_to_cropper,
+        test_crop_preview_returns_exact_server_crop_without_vlm,
+        test_crop_preview_requires_authentication,
     ]
     for test in tests:
         test()

@@ -15,6 +15,7 @@ import com.example.myapplication.camera.WearableCameraGateway
 import com.example.myapplication.camera.WearableCameraState
 import com.example.myapplication.judgment.FakeJudgmentBehavior
 import com.example.myapplication.judgment.FakeJudgmentGateway
+import com.example.myapplication.judgment.CropPreviewOutcome
 import com.example.myapplication.judgment.ImageNormalizer
 import com.example.myapplication.judgment.JudgmentImagePolicy
 import com.example.myapplication.judgment.JudgmentOutcome
@@ -554,6 +555,36 @@ class CookingSessionViewModel(
         )
     }
 
+    fun previewAutomaticCropImage(uriValue: String) {
+        if (!BuildConfig.DEBUG) return
+        val state = uiState.value
+        val session = state.session ?: return
+        val step = state.currentStep ?: return
+        if (session.mode != SessionMode.MANUAL_ONLY || state.cropPreview.isLoading) return
+
+        mutableUiState.update {
+            it.copy(cropPreview = CropPreviewUiState(isLoading = true))
+        }
+        viewModelScope.launch {
+            when (val outcome = networkJudgmentGateway.previewCrop(uriValue, step.imageCropTarget)) {
+                is CropPreviewOutcome.Success -> mutableUiState.update {
+                    if (it.currentStep?.order == step.order) {
+                        it.copy(cropPreview = CropPreviewUiState(result = outcome.result))
+                    } else {
+                        it.copy(cropPreview = CropPreviewUiState())
+                    }
+                }
+                is CropPreviewOutcome.Failure -> mutableUiState.update {
+                    if (it.currentStep?.order == step.order) {
+                        it.copy(cropPreview = CropPreviewUiState(error = outcome.message))
+                    } else {
+                        it.copy(cropPreview = CropPreviewUiState())
+                    }
+                }
+            }
+        }
+    }
+
     private fun judgeSelectedGalleryImage(
         uriValue: String,
         imagePolicy: JudgmentImagePolicy
@@ -581,6 +612,7 @@ class CookingSessionViewModel(
             it.copy(
                 currentScreen = AppScreen.S8_MANUAL,
                 judgingInFlight = true,
+                lastJudgmentTiming = null,
                 judgeError = null,
                 session = active.copy(
                     phase = CookingPhase.JUDGING,
@@ -1341,6 +1373,7 @@ class CookingSessionViewModel(
                             lastCaptureUriByStep = afterCapture.lastCaptureUriByStep + (request.stepOrder to outcome.artifact.imageUri)
                         ),
                         judgingInFlight = true,
+                        lastJudgmentTiming = null,
                         judgeError = null
                     )
                 }
@@ -1422,6 +1455,9 @@ class CookingSessionViewModel(
         }
         if (activeSession.activeRequestId != outcomeRequestId) return
         if (outcome is JudgmentOutcome.Success && !isCurrentJudgment(activeSession, current.currentStep?.order, outcome.result)) return
+        if (outcome is JudgmentOutcome.Success) {
+            mutableUiState.update { it.copy(lastJudgmentTiming = outcome.result.timing) }
+        }
         if (activeSession.mode == SessionMode.MANUAL_ONLY) {
             handleManualGalleryJudgmentOutcome(outcome)
             return
@@ -1463,11 +1499,11 @@ class CookingSessionViewModel(
     private fun handleManualGalleryJudgmentOutcome(outcome: JudgmentOutcome) {
         when (outcome) {
             is JudgmentOutcome.Failure -> {
-                mutableUiState.update {
-                    val session = it.session ?: return@update it
-                    it.copy(
-                        currentScreen = AppScreen.S8_MANUAL,
-                        judgingInFlight = false,
+        mutableUiState.update {
+            val session = it.session ?: return@update it
+            it.copy(
+                currentScreen = AppScreen.S8_MANUAL,
+                judgingInFlight = false,
                         judgeError = outcome.message,
                         session = session.copy(
                             phase = CookingPhase.MANUAL_MODE,
@@ -1742,6 +1778,7 @@ class CookingSessionViewModel(
             val session = it.session ?: return@update it
             it.copy(
                 currentScreen = AppScreen.S8_MANUAL,
+                cropPreview = CropPreviewUiState(),
                 session = session.copy(
                     phase = CookingPhase.MANUAL_MODE,
                     mode = SessionMode.MANUAL_ONLY

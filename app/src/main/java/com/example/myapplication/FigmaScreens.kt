@@ -2,6 +2,7 @@ package com.example.myapplication
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -60,8 +61,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapplication.camera.CaptureOutcome
+import com.example.myapplication.camera.CaptureArtifact
 import com.example.myapplication.camera.WearableCameraState
 import com.example.myapplication.judgment.ImageNormalizer
+import com.example.myapplication.judgment.JudgmentTimingBreakdown
 import com.example.myapplication.voice.WakeWordStatus
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -712,6 +715,14 @@ private fun FigmaDiagnosticsPanel(
             if (session.lastRoundTripMs != null) Text("roundTrip ${session.lastRoundTripMs}ms / vlm ${session.lastVlmLatencyMs ?: "-"}ms", color = FigmaMuted, fontSize = 10.sp)
             session.logs.takeLast(3).forEach { log -> Text("${log.stepOrder}단계 · ${log.message}", color = FigmaMuted, fontSize = 10.sp) }
         }
+        if (BuildConfig.DEBUG && uiState.lastJudgmentTiming != null) {
+            Spacer(Modifier.height(8.dp))
+            FigmaJudgmentTimingCard(
+                timing = checkNotNull(uiState.lastJudgmentTiming),
+                captureArtifact = (uiState.currentCaptureOutcome as? CaptureOutcome.Success)?.artifact,
+                reportedVlmMs = uiState.session?.lastVlmLatencyMs
+            )
+        }
     }
 }
 
@@ -814,6 +825,7 @@ internal fun FigmaManualModeScreen(
     onResumeAuto: () -> Unit,
     onPickGalleryBaseline: () -> Unit,
     onPickGalleryCurrent: () -> Unit,
+    onPickCropPreviewImage: () -> Unit,
     onPickAutomaticReplayImage: () -> Unit,
     onRetryJudgment: () -> Unit,
     onNext: () -> Unit,
@@ -841,6 +853,13 @@ internal fun FigmaManualModeScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 if (BuildConfig.DEBUG) {
+                    FigmaSecondaryButton(
+                        if (uiState.cropPreview.isLoading) "YOLO 크롭 생성 중..." else "YOLO 크롭 미리보기",
+                        onPickCropPreviewImage,
+                        enabled = !uiState.judgingInFlight && !uiState.cropPreview.isLoading,
+                        outlined = true
+                    )
+                    Spacer(Modifier.height(8.dp))
                     FigmaSecondaryButton(
                         if (uiState.judgingInFlight) "YOLO 자동 판정 중..." else "테스트 이미지로 YOLO 자동 판정",
                         onPickAutomaticReplayImage,
@@ -905,6 +924,15 @@ internal fun FigmaManualModeScreen(
                     color = FigmaMuted,
                     fontSize = 10.sp
                 )
+                if (
+                    BuildConfig.DEBUG &&
+                    (uiState.cropPreview.isLoading ||
+                        uiState.cropPreview.result != null ||
+                        uiState.cropPreview.error != null)
+                ) {
+                    Spacer(Modifier.height(16.dp))
+                    FigmaCropPreviewCard(uiState.cropPreview)
+                }
                 if (supportsGalleryJudgment && step.needsStartImage) {
                     Spacer(Modifier.height(12.dp))
                     FigmaSecondaryButton(
@@ -974,6 +1002,13 @@ internal fun FigmaManualModeScreen(
                 Spacer(Modifier.height(22.dp))
                 Text("현재 할 일", color = FigmaOrange, fontSize = 11.sp)
                 Spacer(Modifier.height(8.dp))
+                if (BuildConfig.DEBUG && uiState.lastJudgmentTiming != null) {
+                    FigmaJudgmentTimingCard(
+                        timing = checkNotNull(uiState.lastJudgmentTiming),
+                        reportedVlmMs = session.lastVlmLatencyMs
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
                 Text(step.instruction, color = FigmaInk, fontSize = 21.sp, lineHeight = 30.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Text("“다음”, “다시”, “이전” 명령은 계속 사용할 수 있어요", color = FigmaMuted, fontSize = 11.sp)
@@ -991,6 +1026,148 @@ private fun ImageCropTarget.debugLabel(): String = when (this) {
     ImageCropTarget.CUTTING_BOARD_ROI -> "도마 ROI"
     ImageCropTarget.PAN_COOKING_ROI -> "팬 ROI"
     ImageCropTarget.LEGACY_BOTTOM_60 -> "기존 아래 60%"
+}
+
+@Composable
+private fun FigmaCropPreviewCard(state: CropPreviewUiState) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = FigmaSurface)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("YOLO 서버 크롭 미리보기", color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            when {
+                state.isLoading -> Box(
+                    Modifier.fillMaxWidth().height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = FigmaOrange)
+                        Spacer(Modifier.height(8.dp))
+                        Text("VLM 호출 없이 서버 YOLO만 실행하고 있어요", color = FigmaMuted, fontSize = 10.sp)
+                    }
+                }
+                state.error != null -> Text(
+                    state.error,
+                    color = Color(0xFFC78500),
+                    fontSize = 11.sp
+                )
+                state.result != null -> {
+                    val result = state.result
+                    FigmaOriginalGalleryImageCard(result.sourceImageUri)
+                    Spacer(Modifier.height(10.dp))
+                    FigmaBase64CropImage(result.croppedImageBase64, result.width, result.height)
+                    Spacer(Modifier.height(10.dp))
+                    val modeColor = if (result.cropMode == "YOLO_ROI") FigmaGreen else Color(0xFFC78500)
+                    Text(
+                        "${result.cropMode} · ${result.cropTarget.debugLabel()} · 검출 ${result.detectionCount}개",
+                        color = modeColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    FigmaTimingRow("미리보기 총시간", result.timing.totalMs)
+                    FigmaTimingRow("앱 이미지 준비", result.timing.imagePreparationMs)
+                    FigmaTimingRow("HTTP 왕복", result.timing.httpRoundTripMs)
+                    FigmaTimingRow("서버 YOLO 크롭", result.timing.cropMs)
+                    FigmaTimingRow("전송·프레임워크 추정", result.timing.transportAndFrameworkMs)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FigmaBase64CropImage(encoded: String, width: Int, height: Int) {
+    val loaded by produceState<ImageBitmap?>(initialValue = null, key1 = encoded) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White)) {
+        val image = loaded
+        if (image != null) {
+            Image(
+                bitmap = image,
+                contentDescription = "서버 YOLO 크롭 결과",
+                modifier = Modifier.fillMaxWidth().aspectRatio(width.toFloat() / height.coerceAtLeast(1)),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            Box(
+                Modifier.fillMaxWidth().height(120.dp),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator(color = FigmaOrange) }
+        }
+        Box(Modifier.fillMaxWidth().height(38.dp).background(FigmaGreen), contentAlignment = Alignment.Center) {
+            Text("서버가 VLM에 보낼 이미지 · ${width}×${height}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun FigmaJudgmentTimingCard(
+    timing: JudgmentTimingBreakdown,
+    captureArtifact: CaptureArtifact? = null,
+    reportedVlmMs: Long? = null
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = FigmaWarm)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("판정 지연 분석", color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            captureArtifact?.let { artifact ->
+                FigmaTimingRow("촬영부터 판정까지", artifact.totalCaptureLatencyMs + timing.totalMs, emphasize = true)
+                FigmaTimingRow("카메라 전체 촬영", artifact.totalCaptureLatencyMs)
+                artifact.streamStartupLatencyMs?.let { FigmaTimingRow("카메라 첫 프레임", it) }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp), color = FigmaDivider)
+            }
+            FigmaTimingRow("총 체감시간", timing.totalMs, emphasize = true)
+            FigmaTimingRow("앱 이미지 준비", timing.imagePreparationMs)
+            FigmaTimingRow("HTTP 왕복", timing.httpRoundTripMs)
+            FigmaTimingRow("응답 JSON 해석", timing.responseParseMs)
+            if (timing.retryBackoffMs > 0L) FigmaTimingRow("재시도 대기", timing.retryBackoffMs)
+            HorizontalDivider(Modifier.padding(vertical = 6.dp), color = FigmaDivider)
+            FigmaTimingRow("서버 전체", timing.serverHandlerMs, emphasize = true)
+            FigmaTimingRow("이미지 검증", timing.serverValidationMs)
+            FigmaTimingRow("현재 사진 YOLO", timing.currentCropMs)
+            if (timing.startCropMs > 0L) FigmaTimingRow("기준 사진 YOLO", timing.startCropMs)
+            FigmaTimingRow("VLM 호출 전체", timing.vlmWallMs)
+            reportedVlmMs?.let { FigmaTimingRow("VLM 백엔드 보고", it) }
+            FigmaTimingRow("모델 준비", timing.judgeSetupMs)
+            FigmaTimingRow("프롬프트 생성", timing.promptBuildMs)
+            FigmaTimingRow("서버 기타", timing.serverOtherMs)
+            FigmaTimingRow("전송·프레임워크 추정", timing.transportAndFrameworkMs)
+            Spacer(Modifier.height(7.dp))
+            Text(
+                "현재 ${timing.currentCropMode} · 검출 ${timing.currentDetectionCount}개" +
+                    (timing.startCropMode?.let { " / 기준 $it · 검출 ${timing.startDetectionCount ?: 0}개" } ?: ""),
+                color = if (timing.currentCropMode == "YOLO_ROI") FigmaGreen else Color(0xFFC78500),
+                fontSize = 10.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun FigmaTimingRow(label: String, milliseconds: Long, emphasize: Boolean = false) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = if (emphasize) FigmaInk else FigmaMuted, fontSize = 10.sp)
+        Text(
+            "${milliseconds}ms",
+            color = if (emphasize) FigmaOrange else FigmaInk,
+            fontSize = 10.sp,
+            fontWeight = if (emphasize) FontWeight.Bold else FontWeight.Normal
+        )
+    }
 }
 
 @Composable
