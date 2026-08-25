@@ -106,7 +106,7 @@ internal fun localCropWindowForDetection(
     imageHeight: Int,
     detection: LocalRoiDetection,
     outputAspectRatio: Float,
-    contextPadding: Float = 0.22f
+    contextPadding: Float = LOCAL_CONTEXT_PADDING
 ): LocalCropWindow {
     require(imageWidth > 0 && imageHeight > 0)
     require(outputAspectRatio > 0f && contextPadding >= 0f)
@@ -172,3 +172,4 @@ private fun promptClassToTarget(classId: Int): ImageCropTarget? = when (classId)
 }
 
 internal const val LOCAL_MINIMUM_CONFIDENCE = 0.05f
+internal const val LOCAL_CONTEXT_PADDING = 0f

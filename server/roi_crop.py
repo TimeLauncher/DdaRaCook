@@ -102,7 +102,7 @@ def crop_window_for_bbox(
     image_height: int,
     bbox: tuple[float, float, float, float],
     output_aspect_ratio: float,
-    context_padding: float = 0.18,
+    context_padding: float = 0.0,
 ) -> CropWindow:
     """Expand a detection around its center and preserve an output ratio."""
     if image_width <= 0 or image_height <= 0:

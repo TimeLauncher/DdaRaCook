@@ -55,6 +55,8 @@ class RoiCropTest(unittest.TestCase):
             3024, 4032, (0.3, 0.66, 0.5, 0.27), 4 / 3
         )
         self.assertAlmostEqual(window.width / window.height, 4 / 3, places=3)
+        self.assertEqual(window.width, 1512)
+        self.assertEqual(window.height, 1134)
 
     def test_iou_and_fallback_and_scaling(self):
         self.assertEqual(intersection_over_union((0, 0, 1, 1), (0, 0, 1, 1)), 1)

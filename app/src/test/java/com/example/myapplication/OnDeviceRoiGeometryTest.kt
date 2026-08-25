@@ -61,6 +61,8 @@ class OnDeviceRoiGeometryTest {
         assertNotNull(window)
         assertTrue(window.left >= 0 && window.top >= 0)
         assertEquals(4f / 3f, window.width.toFloat() / window.height, 0.01f)
+        assertEquals(364, window.width)
+        assertEquals(273, window.height)
     }
 
     @Test
