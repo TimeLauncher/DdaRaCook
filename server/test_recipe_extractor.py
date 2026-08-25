@@ -306,6 +306,81 @@ def test_hosted_key_replaces_blocked_direct_fetch():
     assert source.language == "ko"
 
 
+def test_instruction_seconds_reads_korean_durations():
+    seconds = recipe_extractor.instruction_seconds
+    assert seconds("약불로 10분간 끓인 뒤 5분간 뜸을 들인다") == 900
+    assert seconds("30초만 불려 준다") == 30
+    # 범위는 큰 쪽만 센다. 7과 8을 각각 더하면 15분이 되어 버린다.
+    assert seconds("7~8분간 삶는다") == 480
+    assert seconds("먹기 좋게 썬다") == 0
+
+
+def test_consistency_check_reports_ingredient_mismatch():
+    recipe = {
+        "ingredients": [
+            {"name": "다진 마늘", "amount": "1큰술"},
+            {"name": "다진마늘", "amount": "1큰술"},
+            {"name": "소금", "amount": "약간"},
+        ],
+        "steps": [{
+            "instruction": "밥과 다진마늘을 넣고 볶는다",
+            "targetIngredients": ["다진 마늘", "밥"],
+            "inspectionPolicy": None,
+        }],
+    }
+
+    warnings = recipe_extractor.check_recipe_consistency(recipe)
+    joined = " ".join(warnings)
+
+    # 공백만 다른 이름은 같은 재료로 본다.
+    assert "중복" in joined and "다진마늘" in joined
+    # 단계에만 있고 재료 목록에 없다.
+    assert "재료 목록에 없는" in joined and "밥" in joined
+    # 재료 목록에만 있고 어느 단계도 쓰지 않는다.
+    assert "쓰지 않는" in joined and "소금" in joined
+
+
+def test_consistency_check_flags_too_short_expected_time():
+    recipe = {
+        "ingredients": [{"name": "물", "amount": "1컵"}],
+        "steps": [{
+            "instruction": "약불로 10분간 끓인다",
+            "targetIngredients": ["물"],
+            "inspectionPolicy": {
+                "earliestCheckSeconds": 30,
+                "checkIntervalSeconds": 30,
+                "burstSeconds": 2,
+                "requiredConsecutiveDone": 1,
+                "maxExpectedSeconds": 300,
+            },
+        }],
+    }
+
+    warnings = recipe_extractor.check_recipe_consistency(recipe)
+
+    assert any("1단계" in w and "600초" in w for w in warnings), warnings
+
+
+def test_consistency_check_allows_generous_expected_time():
+    """여유를 크게 잡은 것은 문제가 아니다. 짧게 잡힌 경우만 짚는다."""
+    recipe = {
+        "ingredients": [{"name": "물", "amount": "1컵"}],
+        "steps": [{
+            "instruction": "약불로 10분간 끓인다",
+            "targetIngredients": ["물"],
+            "inspectionPolicy": {
+                "earliestCheckSeconds": 30,
+                "checkIntervalSeconds": 30,
+                "burstSeconds": 2,
+                "requiredConsecutiveDone": 1,
+                "maxExpectedSeconds": 900,
+            },
+        }],
+    }
+
+    assert recipe_extractor.check_recipe_consistency(recipe) == []
+
+
 def main() -> int:
     tests = [
         test_parse_supported_youtube_urls,
@@ -320,6 +395,10 @@ def main() -> int:
         test_hosted_transcript_reports_missing_captions,
         test_hosted_transcript_rejects_pending_asr_job,
         test_hosted_key_replaces_blocked_direct_fetch,
+        test_instruction_seconds_reads_korean_durations,
+        test_consistency_check_reports_ingredient_mismatch,
+        test_consistency_check_flags_too_short_expected_time,
+        test_consistency_check_allows_generous_expected_time,
     ]
     for test in tests:
         test()

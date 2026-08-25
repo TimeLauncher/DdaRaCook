@@ -136,8 +136,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 # ── 점수표 ───────────────────────────────────────────────────────────────────
 
 def _normalize(name: str) -> str:
-    """'다진 마늘' 과 '다진마늘' 을 같은 재료로 본다."""
-    return re.sub(r"\s+", "", str(name)).strip().lower()
+    """서버와 같은 기준으로 재료 이름을 맞춘다."""
+    from recipe_extractor import normalize_ingredient_name
+
+    return normalize_ingredient_name(name)
 
 
 def scorecard(result: dict) -> dict:

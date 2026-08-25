@@ -284,7 +284,11 @@ SYSTEM_PROMPT = """당신은 조리 영상을 따라쿡 앱의 실행 가능한 
 - TIME_ONLY도 영상에 시간이 있으면 inspectionPolicy.maxExpectedSeconds에 기록한다.
 - 자동 판정은 checkCondition과 inspectionPolicy가 필수다. earliestCheckSeconds와 checkIntervalSeconds는 30이다.
 - needsStartImage=true는 완료 조건이 '처음보다 변했는가'처럼 시작 이미지와 비교할 때만 쓴다.
-- targetIngredients는 해당 단계에서 카메라가 찾아야 할 재료만 쓴다.
+- targetIngredients는 그 단계에서 실제로 쓰는 재료를 적는다. 소금·설탕처럼 화면에서 잘 보이지
+  않는 양념도 그 단계에 들어간다면 적는다.
+- 재료 목록의 모든 재료는 적어도 한 단계의 targetIngredients에 나와야 한다. 어느 단계에서도
+  쓰지 않는 재료가 남았다면 재료를 잘못 뽑았거나 단계를 빠뜨린 것이니 다시 본다.
+  반대로 targetIngredients에만 있고 재료 목록에 없는 이름도 없어야 한다.
 - voicePrompt는 짧고 자연스러운 한국어 안내이며 instruction과 의미가 같아야 한다.
 - 자막에 병렬 조리(예: 면을 삶는 동안 소스 조리)가 분명할 때만 parallelTimer를 쓴다.
 - 저장 전에 사용자가 검토할 초안이므로 애매한 내용은 warnings에 한국어로 적는다.
@@ -432,6 +436,102 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
     return payload
 
 
+def normalize_ingredient_name(name: Any) -> str:
+    """'다진 마늘'과 '다진마늘'을 같은 재료로 본다."""
+    return re.sub(r"\s+", "", str(name)).strip().lower()
+
+
+# "7~8분"은 7과 8을 각각 세면 15분이 된다. 범위는 큰 쪽만 남기고 센다.
+_DURATION_RANGE = re.compile(r"(\d+)\s*[~∼\-–]\s*(\d+)\s*(분|초)")
+_DURATION_SINGLE = re.compile(r"(\d+(?:\.\d+)?)\s*(분|초)")
+
+
+def instruction_seconds(text: Any) -> int:
+    """단계 문장에 적힌 조리 시간을 초로 더한다. 없으면 0."""
+    normalized = _DURATION_RANGE.sub(lambda m: f"{m.group(2)}{m.group(3)}", str(text))
+    total = 0
+    for value, unit in _DURATION_SINGLE.findall(normalized):
+        total += int(float(value) * (60 if unit == "분" else 1))
+    return total
+
+
+def check_recipe_consistency(recipe_value: Any) -> list[str]:
+    """모델이 놓친 것을 코드가 잡아 사용자에게 넘긴다.
+
+    후처리는 검사와 안전한 축소만 한다. 없는 정보를 지어내지 않는다. 결과는 저장 전에
+    사용자가 고치는 초안이므로, 어디를 봐야 하는지 짚어주는 것만으로 값이 있다.
+    """
+    if not isinstance(recipe_value, dict):
+        return []
+    ingredients = recipe_value.get("ingredients")
+    steps = recipe_value.get("steps")
+    if not isinstance(ingredients, list) or not isinstance(steps, list):
+        return []
+
+    warnings: list[str] = []
+
+    # 재료 목록: 표기만 다른 중복을 찾는다.
+    listed: dict[str, str] = {}
+    duplicates: list[str] = []
+    for item in ingredients:
+        if not isinstance(item, dict):
+            continue
+        raw = str(item.get("name", "")).strip()
+        if not raw:
+            continue
+        key = normalize_ingredient_name(raw)
+        if key in listed:
+            duplicates.append(raw)
+        else:
+            listed[key] = raw
+
+    # 단계가 가리키는 재료를 모은다.
+    targeted: dict[str, str] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        for target in step.get("targetIngredients") or []:
+            raw = str(target).strip()
+            if raw:
+                targeted.setdefault(normalize_ingredient_name(raw), raw)
+
+    missing = [targeted[key] for key in targeted if key not in listed]
+    unused = [listed[key] for key in listed if key not in targeted]
+
+    if duplicates:
+        warnings.append(f"재료 목록에 표기만 다른 중복이 있습니다: {', '.join(duplicates[:5])}")
+    if missing:
+        warnings.append(
+            f"단계에서 쓰지만 재료 목록에 없는 재료가 있습니다: {', '.join(missing[:5])}"
+        )
+    if unused:
+        warnings.append(
+            f"어느 단계에서도 쓰지 않는 재료가 있습니다: {', '.join(unused[:5])}"
+        )
+
+    # 단계 문장의 시간과 예상 시간이 어긋나는지 본다. 여유를 크게 잡은 것은 문제가
+    # 아니므로, 자막이 말한 시간보다 짧게 잡힌 경우만 짚는다.
+    for index, step in enumerate(steps, start=1):
+        if not isinstance(step, dict):
+            continue
+        mentioned = instruction_seconds(step.get("instruction", ""))
+        if mentioned <= 0:
+            continue
+        policy = step.get("inspectionPolicy")
+        if not isinstance(policy, dict):
+            continue
+        try:
+            expected = int(policy.get("maxExpectedSeconds") or 0)
+        except (TypeError, ValueError):
+            continue
+        if 0 < expected < mentioned:
+            warnings.append(
+                f"{index}단계는 문장에 {mentioned}초가 적혔는데 예상 시간이 {expected}초로 더 "
+                f"짧습니다. 확인해 주세요."
+            )
+    return warnings
+
+
 def _downgrade_incomplete_auto_checks(recipe_value: Any) -> list[str]:
     """불완전한 자동 판정은 실패시키지 않고 안전한 수동 단계로 낮춘다."""
     if not isinstance(recipe_value, dict) or not isinstance(recipe_value.get("steps"), list):
@@ -536,6 +636,9 @@ def extract_recipe(
         warning_values = [warning_values]
     warnings = [str(item)[:300] for item in warning_values if str(item).strip()]
     warnings.extend(normalization_warnings)
+    # 검증을 통과한 결과로 검사한다. order 가 1..N 으로 다시 매겨진 뒤라 경고의 단계
+    # 번호가 앱에 보이는 번호와 같다.
+    warnings.extend(check_recipe_consistency(recipe.model_dump()))
     if any(ingredient.amount == "분량 미상" for ingredient in recipe.ingredients):
         warnings.append("자막에 분량이 없는 재료는 '분량 미상'으로 표시했습니다.")
     if len(source.text) >= MAX_TRANSCRIPT_CHARS:
