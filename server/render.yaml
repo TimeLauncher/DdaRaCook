@@ -9,8 +9,11 @@ services:
     envVars:
       - key: VLM_BACKEND
         value: nemotron
+      # 시연·운영에서는 끈다. 켜면 X-Mock-Verdict / X-Mock-Status 헤더로 판정 결과와
+      # 오류를 임의로 주입할 수 있다(server.py:394, 404). 앱은 평상시 이 헤더를 보내지
+      # 않으므로 꺼도 동작에 영향이 없고, 오류 경로를 손으로 시험할 때만 잠시 켠다.
       - key: DEBUG_MODE
-        value: "true"
+        value: "false"
       - key: ROI_CROP_ENABLED
         value: "true"
       - key: NVIDIA_API_KEY
