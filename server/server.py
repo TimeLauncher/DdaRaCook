@@ -28,6 +28,13 @@ if sys.platform == "win32":
 load_dotenv()
 
 import prompts
+from recipe_extractor import (
+    DEFAULT_RECIPE_EXTRACTION_MODEL,
+    RecipeExtractionError,
+    RecipeExtractionResponse,
+    extract_recipe,
+    fetch_transcript,
+)
 from judge import (
     JudgeConfigError,
     JudgeError,
@@ -90,6 +97,10 @@ class JudgeResponse(BaseModel):
     backend: str
 
 
+class RecipeExtractionRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=2048, description="YouTube 영상 URL 또는 video id")
+
+
 # ══════════════════════════════════════════════════════════
 def check_auth(authorization: Optional[str]):
     if not TEAM_TOKEN:
@@ -109,7 +120,7 @@ async def authenticate_judge_step_before_body_validation(request: Request, call_
     알 수 있다. 계약의 401/403 우선순위를 지키기 위해 이 경로만 미리
     인증하고, 실패 응답도 계약의 `{\"detail\": \"문자열\"}` 형태로 만든다.
     """
-    if request.method == "POST" and request.url.path == "/judge-step":
+    if request.method == "POST" and request.url.path in {"/judge-step", "/extract-recipe"}:
         try:
             check_auth(request.headers.get("authorization"))
         except HTTPException as exc:
@@ -191,6 +202,7 @@ def root():
         "endpoints": {
             "GET  /health": "상태 확인 · 환경변수 점검 · 워밍업",
             "POST /judge-step": "단계 완료 판정 (CONTRACT.md 참조)",
+            "POST /extract-recipe": "YouTube 자막에서 레시피 초안 추출",
             "GET  /docs": "API 문서 (브라우저로 열어보세요)",
         },
         "note": "판정은 POST 전용입니다. 브라우저로 /judge-step 를 열면 405가 정상입니다.",
@@ -234,7 +246,32 @@ def health():
         "judge": detail,
         "envConfigured": env,
         "envMissing": [k for k, v in env.items() if not v],
+        "recipeExtraction": {
+            "transcriptProvider": "hosted" if os.getenv("YOUTUBE_TRANSCRIPT_API_KEY") else "direct",
+            "proxyConfigured": bool(os.getenv("YOUTUBE_PROXY_URL")),
+            "model": os.getenv("RECIPE_EXTRACTION_MODEL") or DEFAULT_RECIPE_EXTRACTION_MODEL,
+        },
     }
+
+
+@app.post("/extract-recipe", response_model=RecipeExtractionResponse)
+def extract_recipe_from_youtube(req: RecipeExtractionRequest):
+    """공개 영상 자막을 앱의 Recipe 구조로 변환한다.
+
+    결과는 바로 저장하지 않고 앱 편집기에 초안으로 올린다. 자막과 생성 모델은
+    수량이나 판정 기준을 틀릴 수 있으므로 사용자 확인이 계약의 일부다.
+    """
+    try:
+        source = fetch_transcript(req.url)
+        result = extract_recipe(source)
+    except RecipeExtractionError as exc:
+        raise HTTPException(exc.http_status, str(exc)) from exc
+    print(
+        f"[recipe-extract] video={source.video_id} lang={source.language} "
+        f"steps={len(result['recipe']['steps'])}",
+        flush=True,
+    )
+    return result
 
 
 @app.post("/judge-step", response_model=JudgeResponse)

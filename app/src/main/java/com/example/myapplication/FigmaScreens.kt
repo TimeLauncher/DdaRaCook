@@ -2218,22 +2218,33 @@ private fun FigmaCompareStage(baselineUri: String, currentUri: String?, modifier
 }
 
 @Composable
-internal fun FigmaRecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, onSave: (Recipe) -> Unit) {
-    var title by remember(existing?.id) { mutableStateOf(existing?.title.orEmpty()) }
-    var ingredientsText by remember(existing?.id) { mutableStateOf(existing?.ingredients?.joinToString("\n") { "${it.name}: ${it.amount}" }.orEmpty()) }
-    var steps by remember(existing?.id) { mutableStateOf(existing?.steps.orEmpty()) }
-    var instruction by remember(existing?.id) { mutableStateOf("") }
-    var checkType by remember(existing?.id) { mutableStateOf(CheckType.PRESENCE) }
-    var condition by remember(existing?.id) { mutableStateOf("") }
-    var earliest by remember(existing?.id) { mutableStateOf(AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()) }
-    var interval by remember(existing?.id) { mutableStateOf(AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()) }
-    var consecutive by remember(existing?.id) { mutableStateOf("1") }
-    var maximum by remember(existing?.id) { mutableStateOf("120") }
-    var editingIndex by remember(existing?.id) { mutableStateOf<Int?>(null) }
-    var editingStep by remember(existing?.id) { mutableStateOf(false) }
-    var error by remember(existing?.id) { mutableStateOf<String?>(null) }
-    var dirty by remember(existing?.id) { mutableStateOf(false) }
-    var confirmCancel by remember(existing?.id) { mutableStateOf(false) }
+internal fun FigmaRecipeEditorScreen(
+    existing: Recipe?,
+    importedDraft: Recipe?,
+    isImporting: Boolean,
+    importError: String?,
+    importWarnings: List<String>,
+    onImportYoutube: (String) -> Unit,
+    onCancel: () -> Unit,
+    onSave: (Recipe) -> Unit
+) {
+    val initialRecipe = importedDraft ?: existing
+    var youtubeUrl by remember(existing?.id) { mutableStateOf("") }
+    var title by remember(initialRecipe) { mutableStateOf(initialRecipe?.title.orEmpty()) }
+    var ingredientsText by remember(initialRecipe) { mutableStateOf(initialRecipe?.ingredients?.joinToString("\n") { "${it.name}: ${it.amount}" }.orEmpty()) }
+    var steps by remember(initialRecipe) { mutableStateOf(initialRecipe?.steps.orEmpty()) }
+    var instruction by remember(initialRecipe) { mutableStateOf("") }
+    var checkType by remember(initialRecipe) { mutableStateOf(CheckType.PRESENCE) }
+    var condition by remember(initialRecipe) { mutableStateOf("") }
+    var earliest by remember(initialRecipe) { mutableStateOf(AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()) }
+    var interval by remember(initialRecipe) { mutableStateOf(AUTOMATIC_INSPECTION_INTERVAL_SECONDS.toString()) }
+    var consecutive by remember(initialRecipe) { mutableStateOf("1") }
+    var maximum by remember(initialRecipe) { mutableStateOf("120") }
+    var editingIndex by remember(initialRecipe) { mutableStateOf<Int?>(null) }
+    var editingStep by remember(initialRecipe) { mutableStateOf(false) }
+    var error by remember(initialRecipe) { mutableStateOf<String?>(null) }
+    var dirty by remember(initialRecipe) { mutableStateOf(importedDraft != null) }
+    var confirmCancel by remember(initialRecipe) { mutableStateOf(false) }
 
     BackHandler(enabled = !confirmCancel) {
         when {
@@ -2267,8 +2278,12 @@ internal fun FigmaRecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, on
             instruction = instruction.trim(),
             checkType = checkType,
             checkCondition = condition.trim().takeIf(String::isNotBlank),
-            needsStartImage = old?.needsStartImage ?: (checkType == CheckType.COLOR_CHANGE),
-            inspectionPolicy = if (checkType == CheckType.TIMER_ONLY) null else InspectionPolicy(values[0]!!, values[1]!!, 3, values[2]!!, values[3]!!),
+            needsStartImage = if (old?.checkType == checkType) old.needsStartImage else checkType == CheckType.COLOR_CHANGE,
+            inspectionPolicy = if (checkType == CheckType.TIMER_ONLY && old?.inspectionPolicy == null) {
+                null
+            } else {
+                InspectionPolicy(values[0]!!, values[1]!!, 3, values[2]!!, values[3]!!)
+            },
             targetIngredients = old?.targetIngredients.orEmpty(),
             voicePrompt = instruction.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY,
@@ -2288,7 +2303,14 @@ internal fun FigmaRecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, on
             val parts = line.split(':', limit = 2).map(String::trim)
             parts.firstOrNull()?.takeIf(String::isNotBlank)?.let { Ingredient(it, parts.getOrElse(1) { "적당량" }) }
         }
-        return Recipe(existing?.id.orEmpty(), title.trim(), ingredients, steps, existing?.heroNote ?: "내가 만든 레시피", existing?.isMvpReady ?: false)
+        return Recipe(
+            existing?.id.orEmpty(),
+            title.trim(),
+            ingredients,
+            steps,
+            initialRecipe?.heroNote ?: "내가 만든 레시피",
+            existing?.isMvpReady ?: false
+        )
     }
 
     if (editingStep) {
@@ -2341,7 +2363,7 @@ internal fun FigmaRecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, on
                 val recipe = buildRecipe()
                 val errors = recipe.validationErrors()
                 if (errors.isEmpty()) onSave(recipe) else error = errors.first()
-            })
+            }, enabled = !isImporting)
         }
     }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
@@ -2349,6 +2371,48 @@ internal fun FigmaRecipeEditorScreen(existing: Recipe?, onCancel: () -> Unit, on
             Column(Modifier.padding(horizontal = 20.dp)) {
                 Text(if (existing == null) "새 레시피 만들기" else "레시피 편집", color = FigmaInk, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(12.dp))
+                FigmaSectionLabel("유튜브에서 불러오기")
+                Text(
+                    "공개 영상의 자막을 분석해 재료, 단계, 자동 판정 기준을 채웁니다. 저장 전에 내용을 확인해 주세요.",
+                    color = FigmaMuted,
+                    fontSize = 11.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                FigmaEditorField(
+                    youtubeUrl,
+                    { youtubeUrl = it },
+                    "YouTube 영상 링크",
+                    enabled = !isImporting
+                )
+                Spacer(Modifier.height(8.dp))
+                FigmaPrimaryButton(
+                    if (isImporting) "자막을 분석하는 중..." else "자막에서 레시피 추출",
+                    { onImportYoutube(youtubeUrl) },
+                    enabled = youtubeUrl.isNotBlank() && !isImporting
+                )
+                if (isImporting) {
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = FigmaOrange,
+                        trackColor = FigmaWarmIcon
+                    )
+                }
+                importError?.let {
+                    Text(it, color = Color(0xFFC78500), fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+                importWarnings.forEach {
+                    Text("확인 필요 · $it", color = Color(0xFFC78500), fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp))
+                }
+                if (importedDraft != null) {
+                    Text(
+                        "추출 결과를 편집기에 채웠습니다. 재료 수량과 단계별 판정 기준을 확인해 주세요.",
+                        color = FigmaGreen,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+                Spacer(Modifier.height(22.dp))
                 FigmaSectionLabel("대표 사진")
                 FigmaResourceImage(
                     figmaRecipeImageResource(existing, R.drawable.figma_recipe_cover),

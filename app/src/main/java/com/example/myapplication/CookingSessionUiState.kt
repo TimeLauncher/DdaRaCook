@@ -59,7 +59,11 @@ data class CookingSessionUiState(
     val viewedRecipeIds: List<String> = emptyList(),
     val voiceGuidanceEnabled: Boolean = true,
     val presentationSimulationSelected: Boolean = false,
-    val presentationCaptureVisible: Boolean = false
+    val presentationCaptureVisible: Boolean = false,
+    val editorImportDraft: Recipe? = null,
+    val isRecipeImporting: Boolean = false,
+    val recipeImportError: String? = null,
+    val recipeImportWarnings: List<String> = emptyList()
 ) {
     val isPresentationSimulation: Boolean
         get() = presentationSimulationSelected ||
