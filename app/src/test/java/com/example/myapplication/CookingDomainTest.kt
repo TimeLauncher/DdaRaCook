@@ -219,6 +219,18 @@ class CookingDomainTest {
     }
 
     @Test
+    fun automaticGalleryReplayUsesCameraPipelineWhileNormalGalleryStaysManual() {
+        assertEquals(
+            com.example.myapplication.judgment.JudgmentImagePolicy.AUTOMATIC_CAMERA,
+            galleryJudgmentImagePolicy(isAutomaticReplay = true)
+        )
+        assertEquals(
+            com.example.myapplication.judgment.JudgmentImagePolicy.MANUAL_MODE,
+            galleryJudgmentImagePolicy(isAutomaticReplay = false)
+        )
+    }
+
+    @Test
     fun manualStepThreeDonePhotoBecomesStepFourBaseline() {
         val recipe = RecipeFixtures.sampleRecipes()
             .first { it.id == "sausage-vegetable-stir-fry" }

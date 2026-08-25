@@ -814,6 +814,7 @@ internal fun FigmaManualModeScreen(
     onResumeAuto: () -> Unit,
     onPickGalleryBaseline: () -> Unit,
     onPickGalleryCurrent: () -> Unit,
+    onPickAutomaticReplayImage: () -> Unit,
     onRetryJudgment: () -> Unit,
     onNext: () -> Unit,
     onRepeat: () -> Unit,
@@ -839,6 +840,21 @@ internal fun FigmaManualModeScreen(
                     outlined = true
                 )
                 Spacer(Modifier.height(8.dp))
+                if (BuildConfig.DEBUG) {
+                    FigmaSecondaryButton(
+                        if (uiState.judgingInFlight) "YOLO 자동 판정 중..." else "테스트 이미지로 YOLO 자동 판정",
+                        onPickAutomaticReplayImage,
+                        enabled = !uiState.judgingInFlight && hasRequiredBaseline,
+                        outlined = true
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "실제 서버 · ${step.imageCropTarget.debugLabel()} · 자동 촬영 규격",
+                        color = FigmaMuted,
+                        fontSize = 9.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
             }
             FigmaPrimaryButton("수동으로 다음 단계", onNext)
             Spacer(Modifier.height(8.dp))
@@ -969,6 +985,12 @@ internal fun FigmaManualModeScreen(
             }
         }
     }
+}
+
+private fun ImageCropTarget.debugLabel(): String = when (this) {
+    ImageCropTarget.CUTTING_BOARD_ROI -> "도마 ROI"
+    ImageCropTarget.PAN_COOKING_ROI -> "팬 ROI"
+    ImageCropTarget.LEGACY_BOTTOM_60 -> "기존 아래 60%"
 }
 
 @Composable

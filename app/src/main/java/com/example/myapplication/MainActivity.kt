@@ -245,6 +245,19 @@ private fun TtaraCookApp(
             sessionViewModel.judgeGalleryImage(it.toString())
         }
     }
+    val automaticReplayImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            sessionViewModel.judgeAutomaticReplayImage(it.toString())
+        }
+    }
 
     LaunchedEffect(uiState.currentScreen, uiState.useFakeCamera) {
         if (!uiState.useFakeCamera && uiState.currentScreen == AppScreen.S4_DEVICE) {
@@ -397,6 +410,7 @@ private fun TtaraCookApp(
                     onResumeAuto = sessionViewModel::resumeAutoMode,
                     onPickGalleryBaseline = { galleryBaselineLauncher.launch(arrayOf("image/*")) },
                     onPickGalleryCurrent = { galleryCurrentLauncher.launch(arrayOf("image/*")) },
+                    onPickAutomaticReplayImage = { automaticReplayImageLauncher.launch(arrayOf("image/*")) },
                     onRetryJudgment = sessionViewModel::retryLastManualJudgment,
                     onNext = sessionViewModel::continueManualButtonToNextStep,
                     onRepeat = sessionViewModel::repeatCurrentStep,
