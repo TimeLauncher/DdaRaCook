@@ -920,7 +920,7 @@ internal fun FigmaMyScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text("마이", color = FigmaInk, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                                FigmaIconButton(R.drawable.figma_icon_settings, "설정", { section = FigmaMySection.SETTINGS })
+                                FigmaIconButton(R.drawable.my_settings_icon, "설정", { section = FigmaMySection.SETTINGS })
                             }
                             Spacer(Modifier.height(6.dp))
                             Text("내 레시피와 요리 기록을 한곳에서 관리해요", color = FigmaMuted, fontSize = 11.sp)
