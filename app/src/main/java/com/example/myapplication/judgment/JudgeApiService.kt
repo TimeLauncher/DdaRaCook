@@ -1,6 +1,7 @@
 package com.example.myapplication.judgment
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Base64
 import com.example.myapplication.BuildConfig
 import com.example.myapplication.CheckType
@@ -19,7 +20,6 @@ import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
-import kotlin.system.measureTimeMillis
 
 data class JudgeDebugOptions(
     val mockVerdict: JudgmentVerdict? = null,
@@ -61,6 +61,91 @@ class JudgeApiService(
         mutableState.value = JudgmentGatewayState.Released
     }
 
+    suspend fun previewCrop(
+        imageUri: String,
+        cropTarget: ImageCropTarget
+    ): CropPreviewOutcome = withContext(Dispatchers.IO) {
+        if (teamToken.isBlank()) {
+            return@withContext CropPreviewOutcome.Failure("판정 서버 인증 설정이 없습니다.")
+        }
+
+        val imagePreparationStartedAtMs = SystemClock.elapsedRealtime()
+        val imageBase64 = try {
+            readImageAsBase64(imageUri, JudgmentImagePolicy.AUTOMATIC_CAMERA)
+        } catch (error: Exception) {
+            return@withContext CropPreviewOutcome.Failure(
+                error.message ?: "미리보기 이미지를 준비하지 못했습니다."
+            )
+        }
+        val imagePreparationMs = SystemClock.elapsedRealtime() - imagePreparationStartedAtMs
+        val requestJson = JSONObject().apply {
+            put("image", imageBase64)
+            put("cropTarget", cropTarget.name)
+        }
+        val connection = (
+            URL("${baseUrl.trimEnd('/')}/debug/crop-preview").openConnection() as HttpURLConnection
+            ).apply {
+            requestMethod = "POST"
+            connectTimeout = PREVIEW_TIMEOUT_MS
+            readTimeout = PREVIEW_TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer $teamToken")
+        }
+
+        try {
+            val httpStartedAtMs = SystemClock.elapsedRealtime()
+            connection.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                writer.write(requestJson.toString())
+            }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val responseBody = stream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+            val httpRoundTripMs = SystemClock.elapsedRealtime() - httpStartedAtMs
+            if (responseCode !in 200..299) {
+                return@withContext CropPreviewOutcome.Failure(
+                    serverErrorMessage(responseCode, responseBody)
+                )
+            }
+
+            val responseParseStartedAtMs = SystemClock.elapsedRealtime()
+            val json = JSONObject(responseBody)
+            val serverTiming = json.getJSONObject("timing")
+            val croppedImage = json.getString("croppedImage")
+            val responseParseMs = SystemClock.elapsedRealtime() - responseParseStartedAtMs
+            val serverHandlerMs = serverTiming.optLong("serverHandlerMs", 0L)
+            val totalMs = imagePreparationMs + httpRoundTripMs + responseParseMs
+            CropPreviewOutcome.Success(
+                CropPreviewResult(
+                    sourceImageUri = imageUri,
+                    croppedImageBase64 = croppedImage,
+                    cropMode = json.getString("cropMode"),
+                    cropTarget = cropTarget,
+                    detectionCount = json.optInt("detectionCount", 0),
+                    width = json.getInt("width"),
+                    height = json.getInt("height"),
+                    timing = CropPreviewTiming(
+                        totalMs = totalMs,
+                        imagePreparationMs = imagePreparationMs,
+                        httpRoundTripMs = httpRoundTripMs,
+                        responseParseMs = responseParseMs,
+                        serverHandlerMs = serverHandlerMs,
+                        serverValidationMs = serverTiming.optLong("validationMs", 0L),
+                        cropMs = serverTiming.optLong("cropMs", 0L),
+                        serverOtherMs = serverTiming.optLong("otherMs", 0L),
+                        transportAndFrameworkMs = (httpRoundTripMs - serverHandlerMs).coerceAtLeast(0L)
+                    )
+                )
+            )
+        } catch (error: SocketTimeoutException) {
+            CropPreviewOutcome.Failure("YOLO 크롭 미리보기 응답 시간이 초과됐습니다.")
+        } catch (error: Exception) {
+            CropPreviewOutcome.Failure(error.message ?: "YOLO 크롭 미리보기에 실패했습니다.")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     suspend fun checkHealth(): ServerHealth = withContext(Dispatchers.IO) {
         if (teamToken.isBlank()) return@withContext ServerHealth(false, "판정 서버 인증 설정이 없습니다.")
         val connection = (URL("${baseUrl.trimEnd('/')}/health").openConnection() as HttpURLConnection).apply {
@@ -91,7 +176,11 @@ class JudgeApiService(
 
     private suspend fun judgeInternal(
         request: JudgmentRequest,
-        hasRetried: Boolean
+        hasRetried: Boolean,
+        accumulatedImagePreparationMs: Long = 0L,
+        accumulatedHttpRoundTripMs: Long = 0L,
+        accumulatedResponseParseMs: Long = 0L,
+        accumulatedRetryBackoffMs: Long = 0L
     ): JudgmentOutcome {
         val connection = (URL("${baseUrl.trimEnd('/')}/judge-step").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -105,25 +194,41 @@ class JudgeApiService(
             }
         }
 
+        var attemptImagePreparationMs = 0L
+        var attemptHttpRoundTripMs = 0L
+        var attemptResponseParseMs = 0L
+        var httpStartedAtMs = 0L
+
         return try {
+            val imagePreparationStartedAtMs = SystemClock.elapsedRealtime()
             val requestJson = createRequestJson(request)
+            attemptImagePreparationMs = SystemClock.elapsedRealtime() - imagePreparationStartedAtMs
+
+            httpStartedAtMs = SystemClock.elapsedRealtime()
             connection.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
                 writer.write(requestJson.toString())
             }
 
-            var responseCode = -1
-            var responseBody = ""
-            val roundTripMs = measureTimeMillis {
-                responseCode = connection.responseCode
-                val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-                responseBody = stream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
-            }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val responseBody = stream?.bufferedReader()?.use(BufferedReader::readText).orEmpty()
+            attemptHttpRoundTripMs = SystemClock.elapsedRealtime() - httpStartedAtMs
+
+            val totalImagePreparationMs = accumulatedImagePreparationMs + attemptImagePreparationMs
+            val totalHttpRoundTripMs = accumulatedHttpRoundTripMs + attemptHttpRoundTripMs
 
             if (responseCode !in 200..299) {
                 val retry = retryDirective(responseCode, connection.getHeaderField("Retry-After"))
                 if (retry != null && !hasRetried) {
                     if (retry.delayMs > 0) delay(retry.delayMs)
-                    return judgeInternal(request = request, hasRetried = true)
+                    return judgeInternal(
+                        request = request,
+                        hasRetried = true,
+                        accumulatedImagePreparationMs = totalImagePreparationMs,
+                        accumulatedHttpRoundTripMs = totalHttpRoundTripMs,
+                        accumulatedResponseParseMs = accumulatedResponseParseMs,
+                        accumulatedRetryBackoffMs = accumulatedRetryBackoffMs + retry.delayMs
+                    )
                 }
                 failure(
                     request = request,
@@ -131,7 +236,45 @@ class JudgeApiService(
                     retryable = retry != null
                 )
             } else {
+                val responseParseStartedAtMs = SystemClock.elapsedRealtime()
                 val json = JSONObject(responseBody)
+                val serverTiming = json.optJSONObject("timing")
+                attemptResponseParseMs = SystemClock.elapsedRealtime() - responseParseStartedAtMs
+                val totalResponseParseMs = accumulatedResponseParseMs + attemptResponseParseMs
+                val totalMs = totalImagePreparationMs + totalHttpRoundTripMs +
+                    totalResponseParseMs + accumulatedRetryBackoffMs
+                val timing = serverTiming?.let {
+                    val serverHandlerMs = it.optLong("serverHandlerMs", 0L)
+                    JudgmentTimingBreakdown(
+                        totalMs = totalMs,
+                        imagePreparationMs = totalImagePreparationMs,
+                        httpRoundTripMs = totalHttpRoundTripMs,
+                        responseParseMs = totalResponseParseMs,
+                        retryBackoffMs = accumulatedRetryBackoffMs,
+                        serverHandlerMs = serverHandlerMs,
+                        serverValidationMs = it.optLong("validationMs", 0L),
+                        currentCropMs = it.optLong("currentCropMs", 0L),
+                        startCropMs = it.optLong("startCropMs", 0L),
+                        cropTotalMs = it.optLong("cropTotalMs", 0L),
+                        judgeSetupMs = it.optLong("judgeSetupMs", 0L),
+                        promptBuildMs = it.optLong("promptBuildMs", 0L),
+                        vlmWallMs = it.optLong("vlmWallMs", 0L),
+                        serverOtherMs = it.optLong("otherMs", 0L),
+                        transportAndFrameworkMs = (totalHttpRoundTripMs - serverHandlerMs).coerceAtLeast(0L),
+                        currentCropMode = it.optString("currentCropMode", "UNKNOWN"),
+                        startCropMode = if (it.isNull("startCropMode")) {
+                            null
+                        } else {
+                            it.optString("startCropMode").takeIf(String::isNotBlank)
+                        },
+                        currentDetectionCount = it.optInt("currentDetectionCount", 0),
+                        startDetectionCount = if (it.isNull("startDetectionCount")) {
+                            null
+                        } else {
+                            it.optInt("startDetectionCount")
+                        }
+                    )
+                }
                 JudgmentOutcome.Success(
                     JudgmentResult(
                         requestId = request.requestId,
@@ -140,15 +283,26 @@ class JudgeApiService(
                         verdict = json.getString("verdict").toVerdict(),
                         reasonCode = json.getString("reasonCode").toReasonCode(),
                         vlmLatencyMs = json.optLong("vlmLatencyMs", 0L),
-                        roundTripMs = roundTripMs,
+                        roundTripMs = totalMs,
+                        timing = timing,
                         requestedAtMs = request.requestedAtMs,
                         respondedAtMs = System.currentTimeMillis()
                     )
                 )
             }
         } catch (error: SocketTimeoutException) {
+            if (attemptHttpRoundTripMs == 0L && httpStartedAtMs > 0L) {
+                attemptHttpRoundTripMs = SystemClock.elapsedRealtime() - httpStartedAtMs
+            }
             if (!hasRetried) {
-                judgeInternal(request = request, hasRetried = true)
+                judgeInternal(
+                    request = request,
+                    hasRetried = true,
+                    accumulatedImagePreparationMs = accumulatedImagePreparationMs + attemptImagePreparationMs,
+                    accumulatedHttpRoundTripMs = accumulatedHttpRoundTripMs + attemptHttpRoundTripMs,
+                    accumulatedResponseParseMs = accumulatedResponseParseMs + attemptResponseParseMs,
+                    accumulatedRetryBackoffMs = accumulatedRetryBackoffMs
+                )
             } else {
                 failure(request, "판정 서버가 제한 시간 안에 응답하지 않았습니다.", retryable = true)
             }
@@ -207,6 +361,7 @@ class JudgeApiService(
 
     private companion object {
         const val REQUEST_TIMEOUT_MS = 8_000
+        const val PREVIEW_TIMEOUT_MS = 30_000
         const val HEALTH_TIMEOUT_MS = 5_000
     }
 }

@@ -82,7 +82,7 @@
 
 ```
 server/
-├── server.py              FastAPI · /judge-step · /extract-recipe · /health
+├── server.py              FastAPI · /judge-step · /debug/crop-preview · /extract-recipe · /health
 ├── roi_cropper.py         ONNX ROI 추론 · 도마/팬 크롭 · bottom-60 fallback
 ├── roi_crop.py            bbox 선택·crop 기하 순수 함수
 ├── models/                운영용 고정-prompt ONNX와 재현 메모
@@ -128,6 +128,9 @@ bash check_secrets.sh                          # push 전 필수
 ```
 
 `smoke.py`: `--mock DONE`(AI 없이 배관만) · `--no-start`(1장 모드) · `--repeat 5`(지연 편차) · `--show-raw`(모델 원문)
+
+Debug 앱의 `YOLO 크롭 미리보기`는 `/debug/crop-preview`로 VLM 없이 실제 서버 크롭을 보여주며,
+판정 화면의 `판정 지연 분석`은 앱 전처리·HTTP·서버 검증·YOLO·VLM·기타 시간을 분리해 표시합니다.
 
 레시피를 고쳤을 때 (앱 쪽):
 
