@@ -279,7 +279,8 @@ SYSTEM_PROMPT = """당신은 조리 영상을 따라쿡 앱의 실행 가능한 
 
 단계 판정 규칙:
 - 화면 한 장으로 객관적으로 확인 가능한 가장 구체적인 checkType을 고른다.
-- 맛, 냄새, 불 세기, 정확한 온도, 단순 투입 행위처럼 화면만으로 신뢰하기 어려우면 TIME_ONLY/isAutoCheck=false.
+- 맛, 냄새, 불 세기, 정확한 온도처럼 화면만으로 신뢰하기 어려우면 TIME_ONLY/isAutoCheck=false.
+- 재료를 넣는 행위는 화면으로 확인 가능하다. PRESENCE 자동 판정으로 만든다.
 - TIME_ONLY도 영상에 시간이 있으면 inspectionPolicy.maxExpectedSeconds에 기록한다.
 - 자동 판정은 checkCondition과 inspectionPolicy가 필수다. earliestCheckSeconds와 checkIntervalSeconds는 30이다.
 - needsStartImage=true는 완료 조건이 '처음보다 변했는가'처럼 시작 이미지와 비교할 때만 쓴다.
@@ -287,6 +288,69 @@ SYSTEM_PROMPT = """당신은 조리 영상을 따라쿡 앱의 실행 가능한 
 - voicePrompt는 짧고 자연스러운 한국어 안내이며 instruction과 의미가 같아야 한다.
 - 자막에 병렬 조리(예: 면을 삶는 동안 소스 조리)가 분명할 때만 parallelTimer를 쓴다.
 - 저장 전에 사용자가 검토할 초안이므로 애매한 내용은 warnings에 한국어로 적는다.
+"""
+
+
+# 손으로 만든 기준 레시피(app/RecipeFixtures.kt)를 서버 enum 이름으로 옮긴 것이다.
+# `earliestCheckSeconds`/`checkIntervalSeconds` 는 앱의 withAutomaticInspectionInterval()이
+# 30으로 덮는 죽은 값이라 예시에도 30으로 적는다. 실제로 조절되는 노브는
+# burstSeconds·requiredConsecutiveDone·maxExpectedSeconds 셋뿐이다.
+FEW_SHOT_PROMPT = """
+## 기준 예시
+
+사람이 손으로 만든 레시피다. 형식과 판정 선택의 기준으로만 삼는다.
+**여기 나온 재료나 단계를 새 영상 결과에 옮겨 적지 않는다.**
+
+소세지야채볶음 (자막에 "야채를 썰고 소세지에 칼집을 낸 뒤 양념장을 만들어 볶는다"가 있었을 때):
+{"title":"소세지야채볶음",
+ "ingredients":[{"name":"비엔나소세지","amount":"적당량"},{"name":"양파","amount":"1/3개"},{"name":"케찹","amount":"2큰술"},{"name":"고추장","amount":"1큰술"}],
+ "steps":[
+  {"order":1,"instruction":"야채를 먹기 좋은 크기로 자르고 소세지에 칼집을 낸다","checkType":"STATE_CHANGE","checkCondition":"도마 위에 통째로 남은 야채 덩어리가 없는가","needsStartImage":false,"inspectionPolicy":{"earliestCheckSeconds":30,"checkIntervalSeconds":30,"burstSeconds":2,"requiredConsecutiveDone":1,"maxExpectedSeconds":300},"targetIngredients":["양파","비엔나소세지"],"voicePrompt":"1단계. 야채를 먹기 좋은 크기로 자르고 소세지에 칼집을 내세요.","isAutoCheck":true,"parallelTimer":null,"waitsForParallelTimer":false,"baselineOnStepStart":false},
+  {"order":2,"instruction":"양념장을 만든다","checkType":"TIME_ONLY","checkCondition":null,"needsStartImage":false,"inspectionPolicy":null,"targetIngredients":["케찹","고추장"],"voicePrompt":"2단계. 케찹과 고추장을 섞어 양념장을 만드세요.","isAutoCheck":false,"parallelTimer":null,"waitsForParallelTimer":false,"baselineOnStepStart":false},
+  {"order":3,"instruction":"팬에 기름을 두르고 야채와 소세지를 넣는다","checkType":"PRESENCE","checkCondition":"팬 안에 소세지와 썬 야채가 들어있는가","needsStartImage":false,"inspectionPolicy":{"earliestCheckSeconds":30,"checkIntervalSeconds":30,"burstSeconds":2,"requiredConsecutiveDone":1,"maxExpectedSeconds":90},"targetIngredients":["양파","비엔나소세지"],"voicePrompt":"3단계. 팬에 기름을 두르고 야채와 소세지를 넣으세요.","isAutoCheck":true,"parallelTimer":null,"waitsForParallelTimer":false,"baselineOnStepStart":false},
+  {"order":4,"instruction":"야채와 소세지를 중약불로 볶는다","checkType":"STATE_CHANGE","checkCondition":"시작 시점 사진과 비교해 소세지 칼집이 벌어졌는가","needsStartImage":true,"inspectionPolicy":{"earliestCheckSeconds":30,"checkIntervalSeconds":30,"burstSeconds":3,"requiredConsecutiveDone":1,"maxExpectedSeconds":240},"targetIngredients":["양파","비엔나소세지"],"voicePrompt":"4단계. 야채와 소세지를 중약불로 볶으세요.","isAutoCheck":true,"parallelTimer":null,"waitsForParallelTimer":false,"baselineOnStepStart":true}]}
+
+병렬 조리가 분명할 때만 쓰는 형태(자막에 "면을 삶는 동안 다른 재료를 볶는다"가 있었을 때):
+  1단계에 타이머를 걸고, 그 결과를 쓰는 뒷단계에 waitsForParallelTimer 를 준다.
+  {"order":1,...,"parallelTimer":{"label":"면 삶기","durationSeconds":480,"doneAnnouncement":"면 8분이 다 됐어요. 면을 건져 두세요."}}
+  {"order":6,...,"waitsForParallelTimer":true}
+
+## 자막 표현을 판정으로 옮기는 기준
+
+조리 단계는 **대부분 자동 판정이 가능하다.** TIME_ONLY 는 아래 마지막 항목에 해당할 때만 쓴다.
+보통 6~8단계 레시피라면 절반 이상이 자동 판정으로 나온다. 전부 TIME_ONLY 인 결과는 틀린 결과다.
+
+checkType 이 TIME_ONLY 가 아니면 **반드시** isAutoCheck=true 이고 inspectionPolicy 다섯 값을
+모두 채운다. checkCondition 을 써 놓고 isAutoCheck 를 false 로 두거나 inspectionPolicy 를
+null 로 두면 앱의 자동 확인 기능이 죽는다.
+
+- "볶는다 / 익힌다 / 끓인다"처럼 **재료 겉모습이 변하는 조리**는 TIME_ONLY 로 빼지 않는다.
+  변화를 한 장으로 확인할 수 있으면 COLOR_CHANGE 나 STATE_CHANGE 로 만들고,
+  needsStartImage 와 baselineOnStepStart 를 true 로 둔 뒤 조건을 "시작 시점 사진과 비교해 …"로 쓴다.
+  예: "우삼겹을 볶는다" → COLOR_CHANGE, "시작 시점 사진과 비교해 팬 안의 우삼겹에서 붉은 부분이 줄었는가",
+      isAutoCheck=true, needsStartImage=true, baselineOnStepStart=true, inspectionPolicy 채움
+- 재료를 **넣는 행위**는 PRESENCE 로 하고 시작 사진이 필요 없다.
+  예: "팬에 대파를 넣는다" → PRESENCE, "팬에 대파가 들어가 있는가",
+      isAutoCheck=true, needsStartImage=false, inspectionPolicy 채움
+- **써는 행위**는 STATE_CHANGE 로 하고 도마 기준으로 묻는다.
+  예: "대파를 어슷 썬다" → STATE_CHANGE, "도마 위에 통째로 남은 대파가 없는가",
+      isAutoCheck=true, needsStartImage=false, inspectionPolicy 채움
+- 맛·냄새·불 세기·정확한 온도처럼 화면으로 못 보는 것만 TIME_ONLY 로 둔다.
+  이때만 isAutoCheck=false 이고 checkCondition 은 null 이다.
+- "완성됩니다", "맛있게 드세요" 같은 마무리 인사는 **단계로 만들지 않는다.**
+- 자막 오인식으로 뜻이 통하지 않는 낱말은 **재료로 만들지 않는다.** 경고에만 적는다.
+
+## 분량 표기
+
+자막은 자동 인식이라 단위가 깨져 있다. 뜻이 분명하면 표준 표기로 고쳐 적는다.
+  "반 드푼"·"반 두푼" → "1/2큰술",  "한 푼" → "1큰술",  "200g 이상 넉넉하게" → "200g",  "한 대" → "1대"
+숫자나 단위를 **자막에 없는데 지어내지는 않는다.** 그런 재료만 "분량 미상"으로 둔다.
+
+## 조절되는 값
+
+burstSeconds 는 움직임이 있는 단계 3, 정적인 단계 2.
+requiredConsecutiveDone 은 판정이 흔들리기 쉬운 색·상태 변화 단계 2, 투입 확인처럼 명확한 단계 1.
+maxExpectedSeconds 는 자막의 시간 표현을 초로 옮긴다. "10분 끓이고 5분 뜸" 이면 900.
 """
 
 
@@ -391,8 +455,11 @@ def extract_recipe(
     source: TranscriptSource,
     completion: Optional[Callable[[list[dict[str, str]]], str]] = None,
 ) -> dict[str, Any]:
+    # 예시 투입 여부를 환경변수로 가른다. 효과를 숫자로 비교하려면 끌 수 있어야 한다.
+    use_few_shot = os.getenv("RECIPE_EXTRACTION_FEWSHOT", "1").strip().lower() not in {"0", "false", "no"}
+    system_prompt = SYSTEM_PROMPT + FEW_SHOT_PROMPT if use_few_shot else SYSTEM_PROMPT
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": _user_prompt(source)},
     ]
     if completion is None:
@@ -412,7 +479,10 @@ def extract_recipe(
                     model=os.getenv("RECIPE_EXTRACTION_MODEL") or DEFAULT_RECIPE_EXTRACTION_MODEL,
                     messages=messages,
                     temperature=0,
-                    max_tokens=int(os.getenv("RECIPE_EXTRACTION_MAX_TOKENS", "4000")),
+                    # reasoning 계열(gpt-oss 등)은 사고 과정이 먼저 토큰을 먹는다. 4000이면
+                    # 예시를 붙인 프롬프트에서 JSON이 잘려 파싱이 깨진다. 상한일 뿐이라
+                    # 넉넉히 둬도 짧게 답하는 모델에는 영향이 없다.
+                    max_tokens=int(os.getenv("RECIPE_EXTRACTION_MAX_TOKENS", "12000")),
                     timeout=timeout_seconds,
                 )
                 raw = response.choices[0].message.content or ""
