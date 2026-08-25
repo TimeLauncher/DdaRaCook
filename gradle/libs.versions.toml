@@ -13,6 +13,7 @@ exifInterface = "1.4.2"
 mwdat = "0.9.0"
 vosk = "0.3.75"
 jna = "5.18.1"
+onnxRuntime = "1.24.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -38,6 +39,7 @@ mwdat-core = { group = "com.meta.wearable", name = "mwdat-core", version.ref = "
 mwdat-camera = { group = "com.meta.wearable", name = "mwdat-camera", version.ref = "mwdat" }
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 jna-android = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxRuntime" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

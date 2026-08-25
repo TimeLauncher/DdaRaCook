@@ -43,6 +43,12 @@ android {
         versionCode = 1
         versionName = "1.0"
 
+        // Meta DAT 대상 실기기와 시연 폰은 arm64. ORT의 불필요한 x86/32-bit 네이티브
+        // 라이브러리를 APK에 싣지 않아 온디바이스 모델 추가에 따른 크기 증가를 제한한다.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField(
             "String",
@@ -109,6 +115,7 @@ dependencies {
     implementation(libs.mwdat.core)
     implementation(libs.mwdat.camera)
     implementation(libs.vosk.android)
+    implementation(libs.onnxruntime.android)
     implementation(libs.jna.android) {
         artifact {
             type = "aar"

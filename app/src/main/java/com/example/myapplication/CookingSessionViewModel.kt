@@ -88,6 +88,9 @@ class CookingSessionViewModel(
         persistence.saveRecipes(initialRecipes)
         networkJudgmentGateway.updateBaseUrl(initialServerBaseUrl)
         recipeImportService.updateBaseUrl(initialServerBaseUrl)
+        viewModelScope.launch(Dispatchers.Default) {
+            networkJudgmentGateway.warmUpLocalCropper()
+        }
         if (!initialUseMockJudgment) checkServerHealth()
     }
 
@@ -544,8 +547,8 @@ class CookingSessionViewModel(
     /**
      * 디버그 전용 — 갤러리 이미지를 안경 자동 촬영본처럼 실제 서버에 보낸다.
      *
-     * 수동 갤러리 판정과 달리 전체 시야 1365px 전처리와 단계별 YOLO cropTarget을 사용한다.
-     * 카메라 하드웨어를 제외한 앱 → Render → YOLO → VLM → 상태 전환 경로를 요리 없이 재생한다.
+     * 수동 갤러리 판정과 달리 전체 시야 1365px 전처리와 단계별 폰 YOLO cropTarget을 사용한다.
+     * 카메라 하드웨어를 제외한 앱 → 폰 YOLO → Render VLM → 상태 전환 경로를 요리 없이 재생한다.
      */
     fun judgeAutomaticReplayImage(uriValue: String) {
         if (!BuildConfig.DEBUG) return

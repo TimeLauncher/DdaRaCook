@@ -7,7 +7,7 @@ import com.example.myapplication.JudgmentVerdict
 import kotlinx.coroutines.flow.StateFlow
 
 enum class JudgmentImagePolicy {
-    /** 자동 카메라: YOLO 서버 크롭에 쓸 전체 시야를 긴 변 최대 1365px로 보낸다. */
+    /** 자동 카메라: 폰 YOLO에 쓸 전체 시야를 긴 변 최대 1365px로 준비한다. */
     AUTOMATIC_CAMERA,
 
     /** 수동 모드: 크롭 없이 긴 변만 최대 1024px로 축소한다. */
@@ -56,6 +56,12 @@ data class JudgmentTimingBreakdown(
     val currentCropMs: Long,
     val startCropMs: Long,
     val cropTotalMs: Long,
+    val localModelLoadMs: Long,
+    val localPreprocessMs: Long,
+    val localInferenceMs: Long,
+    val localPostprocessMs: Long,
+    val localEncodeMs: Long,
+    val serverCropTotalMs: Long,
     val judgeSetupMs: Long,
     val promptBuildMs: Long,
     val vlmWallMs: Long,
@@ -64,19 +70,18 @@ data class JudgmentTimingBreakdown(
     val currentCropMode: String,
     val startCropMode: String? = null,
     val currentDetectionCount: Int = 0,
-    val startDetectionCount: Int? = null
+    val startDetectionCount: Int? = null,
+    val serverCurrentCropMode: String? = null
 )
 
 data class CropPreviewTiming(
     val totalMs: Long,
     val imagePreparationMs: Long,
-    val httpRoundTripMs: Long,
-    val responseParseMs: Long,
-    val serverHandlerMs: Long,
-    val serverValidationMs: Long,
-    val cropMs: Long,
-    val serverOtherMs: Long,
-    val transportAndFrameworkMs: Long
+    val modelLoadMs: Long,
+    val preprocessMs: Long,
+    val inferenceMs: Long,
+    val postprocessMs: Long,
+    val encodeMs: Long
 )
 
 data class CropPreviewResult(
