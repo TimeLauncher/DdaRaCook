@@ -19,3 +19,7 @@ services:
         sync: false
       - key: TEAM_TOKEN
         sync: false
+      # Render의 데이터센터 IP는 YouTube 자막 직접 조회가 차단된다(HTTP 503).
+      # 둘 중 하나는 반드시 대시보드에 넣어야 /extract-recipe 가 실제로 동작한다.
+      - key: YOUTUBE_TRANSCRIPT_API_KEY
+        sync: false

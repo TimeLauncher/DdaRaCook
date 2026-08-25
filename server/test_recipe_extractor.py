@@ -199,6 +199,113 @@ def test_model_timeout_stops_after_configured_retry():
     assert completions.calls == 2
 
 
+class FakeHostedResponse:
+    """youtubetranscript.dev 응답 흉내 (requests.Response 중 쓰는 부분만)."""
+
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self.ok = 200 <= status_code < 300
+        self._payload = payload or {}
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def hosted_success_payload() -> dict:
+    return {
+        "request_id": "req_test",
+        "status": "completed",
+        "data": {
+            "video_id": "dQw4w9WgXcQ",
+            "video_title": "계란 볶음밥 만들기",
+            "transcript": {
+                "text": "계란 두 개를 풀어 주세요.",
+                "language": "ko",
+                "source": "auto",
+                # 계약상 start/end 는 밀리초다.
+                "segments": [
+                    {"text": "계란 두 개를 풀어 주세요.", "start": 0, "end": 2500},
+                    {"text": "팬에서 익혀 주세요.", "start": 20000, "end": 23000},
+                ],
+            },
+        },
+        "credits_used": 1,
+    }
+
+
+def test_hosted_transcript_matches_documented_contract():
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["body"] = json
+        return FakeHostedResponse(200, hosted_success_payload())
+
+    with patch.object(recipe_extractor.requests, "post", fake_post):
+        source = recipe_extractor._hosted_transcript("dQw4w9WgXcQ", "test-key")
+
+    assert captured["url"] == "https://www.youtubetranscript.dev/api/v2/transcribe"
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    # format 은 문자열이 아니라 불리언 플래그 객체다.
+    assert captured["body"] == {
+        "video": "dQw4w9WgXcQ",
+        "language": "ko",
+        "format": {"timestamp": True},
+    }
+    assert source.title == "계란 볶음밥 만들기"
+    assert source.language == "ko"
+    # 밀리초를 초로 바꿔 [분:초] 로 찍어야 한다.
+    assert source.text == "[00:00] 계란 두 개를 풀어 주세요.\n[00:20] 팬에서 익혀 주세요."
+
+
+def test_hosted_transcript_reports_missing_captions():
+    with patch.object(
+        recipe_extractor.requests, "post", lambda *a, **k: FakeHostedResponse(404)
+    ):
+        try:
+            recipe_extractor._hosted_transcript("dQw4w9WgXcQ", "test-key")
+        except RecipeExtractionError as error:
+            assert error.http_status == 422
+        else:
+            raise AssertionError("자막이 없으면 422가 필요합니다.")
+
+
+def test_hosted_transcript_rejects_pending_asr_job():
+    """202 는 2xx라 ok 검사를 통과한다. '자막 없음'으로 오해되지 않아야 한다."""
+    with patch.object(
+        recipe_extractor.requests, "post", lambda *a, **k: FakeHostedResponse(202)
+    ):
+        try:
+            recipe_extractor._hosted_transcript("dQw4w9WgXcQ", "test-key")
+        except RecipeExtractionError as error:
+            assert error.http_status == 422
+            assert "음성 변환" in str(error)
+        else:
+            raise AssertionError("ASR 대기 응답에는 명확한 오류가 필요합니다.")
+
+
+def test_hosted_key_replaces_blocked_direct_fetch():
+    """키가 있으면 YouTube 직접 조회(= Render에서 차단되는 경로)를 아예 타지 않아야 한다."""
+
+    def blocked_direct_fetch(*_args, **_kwargs):
+        raise AssertionError("키가 설정되면 직접 조회를 호출하면 안 됩니다.")
+
+    with patch.dict(os.environ, {"YOUTUBE_TRANSCRIPT_API_KEY": "test-key"}), patch.object(
+        recipe_extractor, "YouTubeTranscriptApi", blocked_direct_fetch
+    ), patch.object(
+        recipe_extractor.requests,
+        "post",
+        lambda *a, **k: FakeHostedResponse(200, hosted_success_payload()),
+    ):
+        source = recipe_extractor.fetch_transcript(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+
+    assert source.video_id == "dQw4w9WgXcQ"
+    assert source.language == "ko"
+
+
 def main() -> int:
     tests = [
         test_parse_supported_youtube_urls,
@@ -209,6 +316,10 @@ def main() -> int:
         test_endpoint_returns_recipe_draft,
         test_model_timeout_is_retried_once_then_succeeds,
         test_model_timeout_stops_after_configured_retry,
+        test_hosted_transcript_matches_documented_contract,
+        test_hosted_transcript_reports_missing_captions,
+        test_hosted_transcript_rejects_pending_asr_job,
+        test_hosted_key_replaces_blocked_direct_fetch,
     ]
     for test in tests:
         test()

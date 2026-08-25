@@ -188,7 +188,8 @@ def _hosted_transcript(video_id: str, api_key: str) -> TranscriptSource:
         response = requests.post(
             "https://www.youtubetranscript.dev/api/v2/transcribe",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"video": video_id, "format": {"timestamp": True}},
+            # 직접 조회 경로가 ko를 먼저 찾는 것과 맞춘다. 없으면 서비스가 다른 언어로 대체한다.
+            json={"video": video_id, "language": "ko", "format": {"timestamp": True}},
             timeout=45,
         )
     except requests.RequestException as exc:
@@ -199,6 +200,12 @@ def _hosted_transcript(video_id: str, api_key: str) -> TranscriptSource:
         raise RecipeExtractionError("자막 제공 서비스 설정을 확인해 주세요.", 500)
     if response.status_code == 429:
         raise RecipeExtractionError("자막 요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.", 429)
+    if response.status_code == 202:
+        # 자막이 없어 음성 인식(ASR) 작업으로 넘어간 경우다. 2xx라서 아래 ok 검사를 그냥
+        # 통과하고 '자막 없음'이라는 엉뚱한 422가 되므로 여기서 끊는다. MVP는 폴링하지 않는다.
+        raise RecipeExtractionError(
+            "이 영상은 자막이 없어 음성 변환이 필요합니다. 자막이 있는 영상을 사용해 주세요.", 422
+        )
     if not response.ok:
         raise RecipeExtractionError(f"자막 제공 서비스 오류입니다. ({response.status_code})")
     try:
