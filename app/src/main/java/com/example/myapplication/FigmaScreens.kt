@@ -1258,6 +1258,7 @@ internal fun FigmaRecipeEditorScreen(
             targetIngredients = old?.targetIngredients.orEmpty(),
             voicePrompt = instruction.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY,
+            imageCropTarget = old?.imageCropTarget ?: ImageCropTarget.LEGACY_BOTTOM_60,
             parallelTimer = old?.parallelTimer,
             waitsForParallelTimer = old?.waitsForParallelTimer ?: false,
             baselineOnStepStart = old?.baselineOnStepStart ?: false

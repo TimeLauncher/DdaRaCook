@@ -78,13 +78,13 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_SERVER_BASE_URL = "server_base_url"
         const val KEY_USE_MOCK_JUDGMENT = "use_mock_judgment"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 10
+        const val CURRENT_FIXTURE_VERSION = 11
     }
 }
 
 private fun Recipe.isSessionCompatibleWith(other: Recipe): Boolean =
-    steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition) } ==
-        other.steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition) }
+    steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition, it.imageCropTarget) } ==
+        other.steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition, it.imageCropTarget) }
 
 private fun List<Recipe>.toJson() = JSONArray().also { array ->
     forEach { recipe ->
@@ -109,6 +109,7 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
                         put("targetIngredients", JSONArray(step.targetIngredients))
                         put("voicePrompt", step.voicePrompt)
                         put("isAutoCheck", step.isAutoCheck)
+                        put("imageCropTarget", step.imageCropTarget.name)
                         put("waitsForParallelTimer", step.waitsForParallelTimer)
                         put("baselineOnStepStart", step.baselineOnStepStart)
                         step.parallelTimer?.let { timer ->
@@ -178,6 +179,9 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                         targetIngredients = List(targetsJson.length()) { targetsJson.getString(it) },
                         voicePrompt = step.getString("voicePrompt"),
                         isAutoCheck = step.getBoolean("isAutoCheck"),
+                        imageCropTarget = runCatching {
+                            enumValueOf<ImageCropTarget>(step.optString("imageCropTarget"))
+                        }.getOrDefault(ImageCropTarget.LEGACY_BOTTOM_60),
                         parallelTimer = parallelTimer,
                         waitsForParallelTimer = step.optBoolean("waitsForParallelTimer"),
                         baselineOnStepStart = step.optBoolean("baselineOnStepStart")

@@ -1,11 +1,13 @@
 package com.example.myapplication
 
 import com.example.myapplication.judgment.JudgeDebugOptions
+import com.example.myapplication.judgment.JudgmentImagePolicy
 import com.example.myapplication.judgment.retryDirective
 import com.example.myapplication.judgment.shouldSendStartImage
 import com.example.myapplication.judgment.toHeaders
 import com.example.myapplication.judgment.toReasonCode
 import com.example.myapplication.judgment.toServerType
+import com.example.myapplication.judgment.toServerValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -16,6 +18,18 @@ class JudgeApiContractTest {
     @Test
     fun countUsesContractServerValue() {
         assertEquals("COUNT", CheckType.COUNT.toServerType())
+    }
+
+    @Test
+    fun automaticCropTargetUsesRecipeValueAndManualDisablesCrop() {
+        assertEquals(
+            "CUTTING_BOARD_ROI",
+            ImageCropTarget.CUTTING_BOARD_ROI.toServerValue(JudgmentImagePolicy.AUTOMATIC_CAMERA)
+        )
+        assertEquals(
+            "NO_CROP",
+            ImageCropTarget.PAN_COOKING_ROI.toServerValue(JudgmentImagePolicy.MANUAL_MODE)
+        )
     }
 
     @Test

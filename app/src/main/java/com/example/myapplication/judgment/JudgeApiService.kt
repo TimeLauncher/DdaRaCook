@@ -5,6 +5,7 @@ import android.util.Base64
 import com.example.myapplication.BuildConfig
 import com.example.myapplication.CheckType
 import com.example.myapplication.JudgmentVerdict
+import com.example.myapplication.ImageCropTarget
 import com.example.myapplication.ReasonCode
 import com.example.myapplication.RecipeStep
 import kotlinx.coroutines.Dispatchers
@@ -168,6 +169,7 @@ class JudgeApiService(
             put("checkType", request.checkType.toServerType())
             put("checkCondition", request.checkCondition.orEmpty())
             put("elapsedSeconds", request.elapsedSeconds)
+            put("cropTarget", request.cropTarget.toServerValue(request.imagePolicy))
             if (request.needsStartImage) {
                 put(
                     "startImage",
@@ -245,6 +247,9 @@ internal fun JudgeDebugOptions.toHeaders(): Map<String, String> = buildMap {
  * 변화를 묻는가**로 옮기고, 그 판단은 레시피가 `RecipeStep.needsStartImage` 로 내린다.
  */
 internal fun RecipeStep.shouldSendStartImage(): Boolean = needsStartImage
+
+internal fun ImageCropTarget.toServerValue(imagePolicy: JudgmentImagePolicy): String =
+    if (imagePolicy == JudgmentImagePolicy.MANUAL_MODE) "NO_CROP" else name
 
 internal fun CheckType.toServerType(): String = when (this) {
     CheckType.PRESENCE -> "PRESENCE"

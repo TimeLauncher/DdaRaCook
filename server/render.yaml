@@ -11,6 +11,8 @@ services:
         value: nemotron
       - key: DEBUG_MODE
         value: "true"
+      - key: ROI_CROP_ENABLED
+        value: "true"
       - key: NVIDIA_API_KEY
         sync: false      # 대시보드에서 직접 입력 (저장소에 남기지 않음)
       - key: NVIDIA_BASE_URL

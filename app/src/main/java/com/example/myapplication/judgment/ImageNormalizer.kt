@@ -42,18 +42,17 @@ class ImageNormalizer(private val context: Context) {
             "판정 이미지를 디코딩할 수 없습니다."
         }
         val oriented = decoded.applyOrientation(orientation)
-        val cropped = when (policy) {
-            JudgmentImagePolicy.AUTOMATIC_CAMERA -> oriented.keepBottomPercent(BOTTOM_KEEP_PERCENT)
-            JudgmentImagePolicy.MANUAL_MODE -> oriented
+        val maxLongEdge = when (policy) {
+            JudgmentImagePolicy.AUTOMATIC_CAMERA -> MAX_AUTOMATIC_SOURCE_LONG_EDGE
+            JudgmentImagePolicy.MANUAL_MODE -> MAX_MANUAL_LONG_EDGE
         }
-        val scaled = cropped.scaleToMaxLongEdge(MAX_SERVER_LONG_EDGE)
+        val scaled = oriented.scaleToMaxLongEdge(maxLongEdge)
         val output = ByteArrayOutputStream()
         check(scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) { "JPEG 정규화에 실패했습니다." }
         val bytes = output.toByteArray()
         val outputWidth = scaled.width
         val outputHeight = scaled.height
-        if (scaled !== cropped) scaled.recycle()
-        if (cropped !== oriented) cropped.recycle()
+        if (scaled !== oriented) scaled.recycle()
         if (oriented !== decoded) oriented.recycle()
         decoded.recycle()
         return NormalizedImage(
@@ -76,8 +75,8 @@ class ImageNormalizer(private val context: Context) {
     }
 
     private companion object {
-        const val BOTTOM_KEEP_PERCENT = 60
-        const val MAX_SERVER_LONG_EDGE = 1024
+        const val MAX_AUTOMATIC_SOURCE_LONG_EDGE = 1365
+        const val MAX_MANUAL_LONG_EDGE = 1024
         const val JPEG_QUALITY = 80
     }
 }
@@ -103,45 +102,16 @@ private fun Bitmap.applyOrientation(orientation: Int): Bitmap {
     return if (matrix.isIdentity) this else Bitmap.createBitmap(this, 0, 0, width, height, matrix, true)
 }
 
-private fun Bitmap.keepBottomPercent(keepPercent: Int): Bitmap {
-    val crop = bottomCropBounds(width = width, height = height, keepPercent = keepPercent)
-    if (crop.top == 0 && crop.height == height) return this
-    return Bitmap.createBitmap(this, 0, crop.top, crop.width, crop.height)
-}
-
 private fun Bitmap.scaleToMaxLongEdge(maxLongEdge: Int): Bitmap {
     val output = scaledDimensions(width = width, height = height, maxLongEdge = maxLongEdge)
     if (output.width == width && output.height == height) return this
     return Bitmap.createScaledBitmap(this, output.width, output.height, true)
 }
 
-internal data class BottomCropBounds(
-    val top: Int,
-    val width: Int,
-    val height: Int
-)
-
 internal data class ImageDimensions(
     val width: Int,
     val height: Int
 )
-
-internal fun bottomCropBounds(
-    width: Int,
-    height: Int,
-    keepPercent: Int = 60
-): BottomCropBounds {
-    require(width > 0 && height > 0) { "이미지 크기는 0보다 커야 합니다." }
-    require(keepPercent in 1..100) { "유지 비율은 1~100이어야 합니다." }
-    val retainedHeight = ((height.toLong() * keepPercent) / 100L)
-        .toInt()
-        .coerceAtLeast(1)
-    return BottomCropBounds(
-        top = height - retainedHeight,
-        width = width,
-        height = retainedHeight
-    )
-}
 
 internal fun scaledDimensions(
     width: Int,
@@ -167,5 +137,5 @@ private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
     .digest(this)
     .joinToString("") { "%02x".format(it) }
 
-const val AUTOMATIC_CAMERA_PIPELINE_VERSION = "bottom60-long1024-jpeg80-exif-baked-srgb-v4"
+const val AUTOMATIC_CAMERA_PIPELINE_VERSION = "full-long1365-jpeg80-exif-baked-srgb-v5"
 const val MANUAL_MODE_PIPELINE_VERSION = "no-crop-long1024-jpeg80-exif-baked-srgb-v1"

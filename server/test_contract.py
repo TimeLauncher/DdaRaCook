@@ -1,13 +1,18 @@
 """CONTRACT.md의 인증·검증·mock 오류 응답 회귀 테스트."""
+import base64
+import io
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("TEAM_TOKEN", "contract-test-token")
 os.environ.setdefault("DEBUG_MODE", "true")
 os.environ.setdefault("VLM_BACKEND", "mock")
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import server
+from judge.mock import MockJudge
 
 
 client = TestClient(server.app)
@@ -59,12 +64,75 @@ def test_unknown_mock_status_is_400():
     assert response.status_code == 400
 
 
+def test_crop_target_is_optional_for_old_clients():
+    response = client.post(
+        "/judge-step",
+        headers={**AUTH, "X-Mock-Verdict": "DONE"},
+        json=VALID_BODY,
+    )
+    assert response.status_code == 200
+
+
+def test_valid_crop_target_is_accepted():
+    response = client.post(
+        "/judge-step",
+        headers={**AUTH, "X-Mock-Verdict": "DONE"},
+        json={**VALID_BODY, "cropTarget": "PAN_COOKING_ROI"},
+    )
+    assert response.status_code == 200
+
+
+def test_invalid_crop_target_is_400():
+    response = client.post(
+        "/judge-step",
+        headers={**AUTH, "X-Mock-Verdict": "DONE"},
+        json={**VALID_BODY, "cropTarget": "COUNTERTOP"},
+    )
+    assert response.status_code == 400
+
+
+def test_real_route_forwards_crop_target_to_cropper():
+    output = io.BytesIO()
+    Image.new("RGB", (16, 16), "white").save(output, "JPEG")
+    image_b64 = base64.b64encode(output.getvalue()).decode("ascii")
+    seen_targets = []
+
+    def fake_prepare(value, target):
+        seen_targets.append(target)
+        return value, SimpleNamespace(mode="TEST_CROP")
+
+    old_prepare = server.prepare_judge_image
+    old_get_judge = server.get_judge
+    try:
+        server.prepare_judge_image = fake_prepare
+        server.get_judge = lambda: MockJudge(script="DONE")
+        response = client.post(
+            "/judge-step",
+            headers=AUTH,
+            json={
+                **VALID_BODY,
+                "currentImage": image_b64,
+                "cropTarget": "CUTTING_BOARD_ROI",
+            },
+        )
+    finally:
+        server.prepare_judge_image = old_prepare
+        server.get_judge = old_get_judge
+
+    assert response.status_code == 200
+    assert seen_targets == ["CUTTING_BOARD_ROI"]
+
+
 def main() -> int:
     tests = [
         test_schema_error_is_400_with_string_detail,
         test_unauthenticated_schema_error_does_not_leak_schema,
         test_mock_503_remains_server_failure_not_verdict,
         test_unknown_mock_status_is_400,
+        test_crop_target_is_optional_for_old_clients,
+        test_valid_crop_target_is_accepted,
+        test_invalid_crop_target_is_400,
+        test_real_route_forwards_crop_target_to_cropper,
     ]
     for test in tests:
         test()
