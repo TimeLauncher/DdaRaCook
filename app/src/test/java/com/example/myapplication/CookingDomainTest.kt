@@ -13,6 +13,34 @@ import org.junit.Test
 
 class CookingDomainTest {
     @Test
+    fun twentyMinuteFilterIncludesBoundaryAndExcludesLongerRecipes() {
+        val source = RecipeFixtures.sampleRecipes().first()
+        val twentyMinutes = source.copy(
+            id = "twenty-minutes",
+            steps = listOf(
+                source.steps.first().copy(
+                    inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 20 * 60)
+                )
+            )
+        )
+        val twentyOneMinutes = twentyMinutes.copy(
+            id = "twenty-one-minutes",
+            steps = listOf(
+                twentyMinutes.steps.first().copy(
+                    inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 21 * 60)
+                )
+            )
+        )
+
+        assertEquals(
+            listOf("twenty-minutes"),
+            listOf(twentyMinutes, twentyOneMinutes)
+                .upToDurationSeconds(20 * 60)
+                .map(Recipe::id)
+        )
+    }
+
+    @Test
     fun sausageFourthStepHidesCompletionCriteriaForRealAndPresentationFlows() {
         assertFalse(
             shouldShowFigmaCompletionCriteria(

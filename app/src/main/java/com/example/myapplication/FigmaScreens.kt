@@ -90,6 +90,7 @@ private const val SERVER_IMAGE_ASPECT_RATIO = 1024f / 819f
 private val FigmaGreenSurface = Color(0xFFE8F7E4)
 private val FigmaYellow = Color(0xFFF2B81A)
 private val FigmaYellowSurface = Color(0xFFFAF5E5)
+private const val TWENTY_MINUTES_IN_SECONDS = 20 * 60
 
 private fun figmaRecipeImageResource(recipe: Recipe?, fallbackResource: Int): Int {
     return figmaHomeRecipeImageResource(recipe, fallbackResource)
@@ -372,15 +373,21 @@ internal fun FigmaRecipeScreen(
     onPresentationSimulation: () -> Unit,
     onResume: () -> Unit
 ) {
+    var onlyTwentyMinutesOrLess by remember { mutableStateOf(false) }
     val presentationCard = PresentationSimulation.homeCard(uiState.recipes)
     val youtubeDemoRecipe = uiState.recipes.firstOrNull { it.id == "kimchi" }
         ?: uiState.recipes.firstOrNull()
-    val homeRecipes = buildList {
+    val allHomeRecipes = buildList {
         uiState.recipes.forEach { recipe ->
             add(recipe)
             if (recipe.id == "eggroll" && presentationCard != null) add(presentationCard)
         }
         if (presentationCard != null && none { it.id == presentationCard.id }) add(presentationCard)
+    }
+    val homeRecipes = if (onlyTwentyMinutesOrLess) {
+        allHomeRecipes.upToDurationSeconds(TWENTY_MINUTES_IN_SECONDS)
+    } else {
+        allHomeRecipes
     }
     Box(Modifier.fillMaxSize().background(Color.White)) {
         Column(
@@ -397,9 +404,17 @@ internal fun FigmaRecipeScreen(
                 Text("안경과 함께, 필요한 순간만 확인해요", color = FigmaMuted, fontSize = 13.sp)
                 Spacer(Modifier.height(18.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FigmaChip("전체", selected = true)
+                    FigmaChip(
+                        "전체",
+                        selected = !onlyTwentyMinutesOrLess,
+                        onClick = { onlyTwentyMinutesOrLess = false }
+                    )
                     FigmaChip("한식")
-                    FigmaChip("20분 이하")
+                    FigmaChip(
+                        "20분 이하",
+                        selected = onlyTwentyMinutesOrLess,
+                        onClick = { onlyTwentyMinutesOrLess = true }
+                    )
                     FigmaChip("초보 추천")
                 }
             }
@@ -453,8 +468,12 @@ internal fun FigmaRecipeScreen(
                     modifier = Modifier.semantics { contentDescription = "레시피 목록 제목" }
                 )
                 Spacer(Modifier.height(10.dp))
-                if (uiState.recipes.isEmpty() && !uiState.isLoading) {
-                    FigmaMessageCard("저장된 레시피가 없어요", "아래 추가 버튼으로 첫 레시피를 만들어 보세요.")
+                if (homeRecipes.isEmpty() && !uiState.isLoading) {
+                    if (onlyTwentyMinutesOrLess && uiState.recipes.isNotEmpty()) {
+                        FigmaMessageCard("20분 이하 레시피가 없어요", "전체를 누르면 모든 레시피를 볼 수 있어요.")
+                    } else {
+                        FigmaMessageCard("저장된 레시피가 없어요", "아래 추가 버튼으로 첫 레시피를 만들어 보세요.")
+                    }
                 }
                 homeRecipes.chunked(2).forEachIndexed { rowIndex, recipes ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -2615,10 +2634,33 @@ private fun FigmaTinyButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun FigmaChip(label: String, selected: Boolean = false, green: Boolean = false) {
+private fun FigmaChip(
+    label: String,
+    selected: Boolean = false,
+    green: Boolean = false,
+    onClick: (() -> Unit)? = null
+) {
     val background = when { green -> FigmaGreenSurface; selected -> FigmaOrange; else -> FigmaWarm }
     val color = when { green -> FigmaGreen; selected -> Color.White; else -> Color(0xFF4D3F31) }
-    Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(background).padding(horizontal = 12.dp, vertical = 8.dp))
+    Text(
+        label,
+        color = color,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(background)
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .clickable(onClick = onClick)
+                        .semantics { contentDescription = "$label 필터" }
+                } else {
+                    Modifier
+                }
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    )
 }
 
 @Composable

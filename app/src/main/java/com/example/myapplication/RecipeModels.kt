@@ -11,9 +11,15 @@ data class Recipe(
     val heroNote: String,
     val isMvpReady: Boolean
 ) {
+    val totalDurationSeconds: Int
+        get() = steps.sumOf { it.inspectionPolicy?.maxExpectedSeconds ?: 0 }
+
     val totalDurationLabel: String
-        get() = "${steps.sumOf { it.inspectionPolicy?.maxExpectedSeconds ?: 0 } / 60}분"
+        get() = "${totalDurationSeconds / 60}분"
 }
+
+internal fun List<Recipe>.upToDurationSeconds(maxDurationSeconds: Int): List<Recipe> =
+    filter { it.totalDurationSeconds <= maxDurationSeconds }
 
 @Immutable
 data class Ingredient(
