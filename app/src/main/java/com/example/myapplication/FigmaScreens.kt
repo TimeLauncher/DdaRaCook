@@ -854,7 +854,7 @@ internal fun FigmaManualModeScreen(
                 Spacer(Modifier.height(8.dp))
                 if (BuildConfig.DEBUG) {
                     FigmaSecondaryButton(
-                        if (uiState.cropPreview.isLoading) "YOLO 크롭 생성 중..." else "YOLO 크롭 미리보기",
+                        if (uiState.cropPreview.isLoading) "폰 YOLO 크롭 중..." else "폰 YOLO 크롭 미리보기",
                         onPickCropPreviewImage,
                         enabled = !uiState.judgingInFlight && !uiState.cropPreview.isLoading,
                         outlined = true
@@ -1036,7 +1036,7 @@ private fun FigmaCropPreviewCard(state: CropPreviewUiState) {
         colors = CardDefaults.cardColors(containerColor = FigmaSurface)
     ) {
         Column(Modifier.padding(14.dp)) {
-            Text("YOLO 서버 크롭 미리보기", color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text("YOLO 폰 크롭 미리보기", color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
             when {
                 state.isLoading -> Box(
@@ -1046,7 +1046,7 @@ private fun FigmaCropPreviewCard(state: CropPreviewUiState) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator(color = FigmaOrange)
                         Spacer(Modifier.height(8.dp))
-                        Text("VLM 호출 없이 서버 YOLO만 실행하고 있어요", color = FigmaMuted, fontSize = 10.sp)
+                        Text("인터넷 없이 이 폰에서 YOLO를 실행하고 있어요", color = FigmaMuted, fontSize = 10.sp)
                     }
                 }
                 state.error != null -> Text(
@@ -1060,7 +1060,7 @@ private fun FigmaCropPreviewCard(state: CropPreviewUiState) {
                     Spacer(Modifier.height(10.dp))
                     FigmaBase64CropImage(result.croppedImageBase64, result.width, result.height)
                     Spacer(Modifier.height(10.dp))
-                    val modeColor = if (result.cropMode == "YOLO_ROI") FigmaGreen else Color(0xFFC78500)
+                    val modeColor = if (result.cropMode.contains("YOLO_ROI")) FigmaGreen else Color(0xFFC78500)
                     Text(
                         "${result.cropMode} · ${result.cropTarget.debugLabel()} · 검출 ${result.detectionCount}개",
                         color = modeColor,
@@ -1070,9 +1070,11 @@ private fun FigmaCropPreviewCard(state: CropPreviewUiState) {
                     Spacer(Modifier.height(8.dp))
                     FigmaTimingRow("미리보기 총시간", result.timing.totalMs)
                     FigmaTimingRow("앱 이미지 준비", result.timing.imagePreparationMs)
-                    FigmaTimingRow("HTTP 왕복", result.timing.httpRoundTripMs)
-                    FigmaTimingRow("서버 YOLO 크롭", result.timing.cropMs)
-                    FigmaTimingRow("전송·프레임워크 추정", result.timing.transportAndFrameworkMs)
+                    FigmaTimingRow("폰 모델 준비", result.timing.modelLoadMs)
+                    FigmaTimingRow("폰 YOLO 전처리", result.timing.preprocessMs)
+                    FigmaTimingRow("폰 ONNX 추론", result.timing.inferenceMs)
+                    FigmaTimingRow("검출 선택·크롭", result.timing.postprocessMs)
+                    FigmaTimingRow("JPEG 저장", result.timing.encodeMs)
                 }
             }
         }
@@ -1094,7 +1096,7 @@ private fun FigmaBase64CropImage(encoded: String, width: Int, height: Int) {
         if (image != null) {
             Image(
                 bitmap = image,
-                contentDescription = "서버 YOLO 크롭 결과",
+                contentDescription = "폰 YOLO 크롭 결과",
                 modifier = Modifier.fillMaxWidth().aspectRatio(width.toFloat() / height.coerceAtLeast(1)),
                 contentScale = ContentScale.Fit
             )
@@ -1105,7 +1107,7 @@ private fun FigmaBase64CropImage(encoded: String, width: Int, height: Int) {
             ) { CircularProgressIndicator(color = FigmaOrange) }
         }
         Box(Modifier.fillMaxWidth().height(38.dp).background(FigmaGreen), contentAlignment = Alignment.Center) {
-            Text("서버가 VLM에 보낼 이미지 · ${width}×${height}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text("폰이 VLM 서버에 보낼 이미지 · ${width}×${height}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1138,8 +1140,14 @@ private fun FigmaJudgmentTimingCard(
             HorizontalDivider(Modifier.padding(vertical = 6.dp), color = FigmaDivider)
             FigmaTimingRow("서버 전체", timing.serverHandlerMs, emphasize = true)
             FigmaTimingRow("이미지 검증", timing.serverValidationMs)
-            FigmaTimingRow("현재 사진 YOLO", timing.currentCropMs)
-            if (timing.startCropMs > 0L) FigmaTimingRow("기준 사진 YOLO", timing.startCropMs)
+            FigmaTimingRow("현재 사진 폰 YOLO", timing.currentCropMs)
+            if (timing.startCropMs > 0L) FigmaTimingRow("기준 사진 폰 YOLO", timing.startCropMs)
+            FigmaTimingRow("폰 모델 준비", timing.localModelLoadMs)
+            FigmaTimingRow("폰 ONNX 추론", timing.localInferenceMs)
+            FigmaTimingRow("폰 전처리", timing.localPreprocessMs)
+            FigmaTimingRow("폰 검출·크롭", timing.localPostprocessMs)
+            FigmaTimingRow("폰 JPEG 저장", timing.localEncodeMs)
+            if (timing.serverCropTotalMs > 0L) FigmaTimingRow("서버 폴백 YOLO", timing.serverCropTotalMs)
             FigmaTimingRow("VLM 호출 전체", timing.vlmWallMs)
             reportedVlmMs?.let { FigmaTimingRow("VLM 백엔드 보고", it) }
             FigmaTimingRow("모델 준비", timing.judgeSetupMs)
@@ -1150,7 +1158,7 @@ private fun FigmaJudgmentTimingCard(
             Text(
                 "현재 ${timing.currentCropMode} · 검출 ${timing.currentDetectionCount}개" +
                     (timing.startCropMode?.let { " / 기준 $it · 검출 ${timing.startDetectionCount ?: 0}개" } ?: ""),
-                color = if (timing.currentCropMode == "YOLO_ROI") FigmaGreen else Color(0xFFC78500),
+                color = if (timing.currentCropMode.contains("YOLO_ROI")) FigmaGreen else Color(0xFFC78500),
                 fontSize = 10.sp
             )
         }
