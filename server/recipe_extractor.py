@@ -327,7 +327,7 @@ null 로 두면 앱의 자동 확인 기능이 죽는다.
 - "볶는다 / 익힌다 / 끓인다"처럼 **재료 겉모습이 변하는 조리**는 TIME_ONLY 로 빼지 않는다.
   변화를 한 장으로 확인할 수 있으면 COLOR_CHANGE 나 STATE_CHANGE 로 만들고,
   needsStartImage 와 baselineOnStepStart 를 true 로 둔 뒤 조건을 "시작 시점 사진과 비교해 …"로 쓴다.
-  예: "우삼겹을 볶는다" → COLOR_CHANGE, "시작 시점 사진과 비교해 팬 안의 우삼겹에서 붉은 부분이 줄었는가",
+  예: "양파를 볶는다" → COLOR_CHANGE, "시작 시점 사진과 비교해 팬 안의 양파가 투명해졌는가",
       isAutoCheck=true, needsStartImage=true, baselineOnStepStart=true, inspectionPolicy 채움
 - 재료를 **넣는 행위**는 PRESENCE 로 하고 시작 사진이 필요 없다.
   예: "팬에 대파를 넣는다" → PRESENCE, "팬에 대파가 들어가 있는가",
@@ -338,6 +338,9 @@ null 로 두면 앱의 자동 확인 기능이 죽는다.
 - 맛·냄새·불 세기·정확한 온도처럼 화면으로 못 보는 것만 TIME_ONLY 로 둔다.
   이때만 isAutoCheck=false 이고 checkCondition 은 null 이다.
 - "완성됩니다", "맛있게 드세요" 같은 마무리 인사는 **단계로 만들지 않는다.**
+- **단계는 동작 하나 단위로 끊는다.** "대파를 썰어 팬에 넣고 소금을 뿌린 뒤 볶는다"처럼
+  여러 동작을 한 단계에 묶으면 사용자가 어디까지 했는지 알 수 없다. 썰기·투입·볶기는
+  각각 다른 단계다. 보통 6~10단계가 나온다.
 - 자막 오인식으로 뜻이 통하지 않는 낱말은 **재료로 만들지 않는다.** 경고에만 적는다.
 
 ## 분량 표기
@@ -471,8 +474,11 @@ def extract_recipe(
             base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
             max_retries=0,
         )
-        timeout_seconds = float(os.getenv("RECIPE_EXTRACTION_TIMEOUT_S", "90"))
-        timeout_retries = max(0, int(os.getenv("RECIPE_EXTRACTION_TIMEOUT_RETRIES", "1")))
+        # 앱 읽기 제한이 200초다(YouTubeRecipeApiService.READ_TIMEOUT_MS). 자막 조회까지
+        # 합쳐 그 안에 끝나야 앱이 소켓 타임아웃 대신 서버 메시지를 받는다.
+        # 90초×2회는 Render 에서 180초를 다 쓰고 실패했다 — 재시도를 없애고 한 번을 길게 준다.
+        timeout_seconds = float(os.getenv("RECIPE_EXTRACTION_TIMEOUT_S", "150"))
+        timeout_retries = max(0, int(os.getenv("RECIPE_EXTRACTION_TIMEOUT_RETRIES", "0")))
         for attempt in range(timeout_retries + 1):
             try:
                 response = client.chat.completions.create(
