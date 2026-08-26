@@ -46,6 +46,19 @@ class OnDeviceRoiGeometryTest {
     }
 
     @Test
+    fun autoRoiSelectsNearestSupportedTargetAcrossBoardAndPan() {
+        val board = detection(ImageCropTarget.CUTTING_BOARD_ROI, 0.95f, 0.15f, 0.30f)
+        val pan = detection(ImageCropTarget.PAN_COOKING_ROI, 0.60f, 0.45f, 0.55f)
+
+        val selected = selectLocalActiveDetection(
+            listOf(board, pan),
+            ImageCropTarget.AUTO_ROI
+        )
+
+        assertEquals(pan, selected)
+    }
+
+    @Test
     fun suppressesSynonymBoxesAndCreatesExactBoardRatio() {
         val first = detection(ImageCropTarget.CUTTING_BOARD_ROI, 0.8f, 0.3f, 0.4f)
         val duplicate = first.copy(confidence = 0.7f, x = 0.31f)

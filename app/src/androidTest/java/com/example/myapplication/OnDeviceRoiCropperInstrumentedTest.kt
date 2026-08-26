@@ -19,11 +19,11 @@ class OnDeviceRoiCropperInstrumentedTest {
         val cropper = OnDeviceRoiCropper(instrumentation.targetContext)
 
         cropper.warmUp()
-        val result = cropper.crop(sourceBytes, ImageCropTarget.CUTTING_BOARD_ROI)
+        val result = cropper.crop(sourceBytes, ImageCropTarget.AUTO_ROI)
 
         assertEquals("LOCAL_YOLO_ROI", result.mode)
-        assertEquals(1024, result.width)
-        assertEquals(768, result.height)
+        assertEquals(768, result.width)
+        assertEquals(576, result.height)
         assertTrue(result.detectionCount > 0)
         assertTrue("warm inference was ${result.timing.inferenceMs}ms", result.timing.inferenceMs < 2_000)
     }

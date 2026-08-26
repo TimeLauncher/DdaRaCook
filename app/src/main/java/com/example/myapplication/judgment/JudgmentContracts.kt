@@ -28,7 +28,7 @@ data class JudgmentRequest(
     val baselineImageUri: String?,
     val currentImageUri: String,
     val imagePolicy: JudgmentImagePolicy = JudgmentImagePolicy.AUTOMATIC_CAMERA,
-    val cropTarget: ImageCropTarget = ImageCropTarget.LEGACY_BOTTOM_60,
+    val cropTarget: ImageCropTarget = ImageCropTarget.AUTO_ROI,
     val requestedAtMs: Long = System.currentTimeMillis()
 )
 

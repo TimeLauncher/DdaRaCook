@@ -1,6 +1,7 @@
 import unittest
 
 from roi_crop import (
+    AUTO_ROI,
     Detection,
     bottom_60_fallback,
     crop_window_for_bbox,
@@ -40,6 +41,13 @@ class RoiCropTest(unittest.TestCase):
                 maximum_gaze_distance=0.30,
             )
         )
+
+    def test_auto_roi_selects_nearest_supported_class(self):
+        detections = [
+            Detection("CUTTING_BOARD_ROI", 0.95, (0.10, 0.20, 0.20, 0.20)),
+            Detection("PAN_COOKING_ROI", 0.60, (0.40, 0.50, 0.25, 0.25)),
+        ]
+        self.assertEqual(select_active_detection(detections, AUTO_ROI), detections[1])
 
     def test_square_crop_preserves_ratio_and_contains_box_near_edge(self):
         window = crop_window_for_bbox(

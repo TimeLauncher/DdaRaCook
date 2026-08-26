@@ -82,6 +82,15 @@ def test_valid_crop_target_is_accepted():
     assert response.status_code == 200
 
 
+def test_auto_crop_target_is_accepted():
+    response = client.post(
+        "/judge-step",
+        headers={**AUTH, "X-Mock-Verdict": "DONE"},
+        json={**VALID_BODY, "cropTarget": "AUTO_ROI"},
+    )
+    assert response.status_code == 200
+
+
 def test_invalid_crop_target_is_400():
     response = client.post(
         "/judge-step",
@@ -163,6 +172,7 @@ def main() -> int:
         test_unknown_mock_status_is_400,
         test_crop_target_is_optional_for_old_clients,
         test_valid_crop_target_is_accepted,
+        test_auto_crop_target_is_accepted,
         test_invalid_crop_target_is_400,
         test_real_route_forwards_crop_target_to_cropper,
         test_crop_preview_returns_exact_server_crop_without_vlm,

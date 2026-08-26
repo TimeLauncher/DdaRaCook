@@ -3,6 +3,7 @@ package com.example.myapplication.recipeimport
 import com.example.myapplication.BuildConfig
 import com.example.myapplication.CheckType
 import com.example.myapplication.Ingredient
+import com.example.myapplication.ImageCropTarget
 import com.example.myapplication.InspectionPolicy
 import com.example.myapplication.ParallelTimer
 import com.example.myapplication.Recipe
@@ -110,6 +111,7 @@ internal fun parseRecipeExtractionResponse(body: String): RecipeImportResult {
 private fun JSONObject.toRecipeStep(order: Int): RecipeStep {
     val instruction = getString("instruction")
     val checkType = serverCheckTypeToApp(getString("checkType"))
+    val isAutoCheck = optBoolean("isAutoCheck", checkType != CheckType.TIMER_ONLY)
     val policy = optJSONObject("inspectionPolicy")?.let {
         InspectionPolicy(
             earliestCheckSeconds = it.getInt("earliestCheckSeconds"),
@@ -136,12 +138,16 @@ private fun JSONObject.toRecipeStep(order: Int): RecipeStep {
         inspectionPolicy = policy,
         targetIngredients = List(targets.length()) { targets.getString(it) },
         voicePrompt = optString("voicePrompt").takeIf(String::isNotBlank) ?: instruction,
-        isAutoCheck = optBoolean("isAutoCheck", checkType != CheckType.TIMER_ONLY),
+        isAutoCheck = isAutoCheck,
+        imageCropTarget = importedStepCropTarget(isAutoCheck),
         parallelTimer = timer,
         waitsForParallelTimer = optBoolean("waitsForParallelTimer"),
         baselineOnStepStart = optBoolean("baselineOnStepStart")
     )
 }
+
+internal fun importedStepCropTarget(isAutoCheck: Boolean): ImageCropTarget =
+    if (isAutoCheck) ImageCropTarget.AUTO_ROI else ImageCropTarget.LEGACY_BOTTOM_60
 
 private fun JSONObject.optNullableString(name: String): String? =
     if (!has(name) || isNull(name)) null else getString(name).takeIf(String::isNotBlank)

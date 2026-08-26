@@ -12,6 +12,7 @@ from typing import Iterable
 
 CUTTING_BOARD_ROI = "CUTTING_BOARD_ROI"
 PAN_COOKING_ROI = "PAN_COOKING_ROI"
+AUTO_ROI = "AUTO_ROI"
 DEFAULT_ASPECT_RATIOS = {
     CUTTING_BOARD_ROI: 4 / 3,
     PAN_COOKING_ROI: 1.0,
@@ -81,7 +82,7 @@ def select_active_detection(
             detection.center[0] - anchor_x, detection.center[1] - anchor_y
         )
         if (
-            detection.class_name == expected_class
+            (expected_class == AUTO_ROI or detection.class_name == expected_class)
             and detection.confidence >= minimum_confidence
             and (maximum_gaze_distance is None or distance <= maximum_gaze_distance)
         ):
