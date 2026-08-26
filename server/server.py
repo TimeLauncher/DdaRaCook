@@ -11,12 +11,15 @@ T1-4 단계: 실제 VLM 호출을 연결합니다.
 import os
 import sys
 import time
+import base64
+import io
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from PIL import Image
 from pydantic import BaseModel, Field
 
 if sys.platform == "win32":
@@ -28,6 +31,7 @@ if sys.platform == "win32":
 load_dotenv()
 
 import prompts
+from roi_cropper import CropTarget, cropper_status, prepare_judge_image
 from recipe_extractor import (
     DEFAULT_RECIPE_EXTRACTION_MODEL,
     RecipeExtractionError,
@@ -87,6 +91,10 @@ class JudgeRequest(BaseModel):
     startImage: Optional[str] = Field(
         None, description="base64 JPEG. 비교가 필요한 유형에서만 전송")
     currentImage: str = Field(..., description="base64 JPEG")
+    cropTarget: Optional[CropTarget] = Field(
+        None,
+        description="Optional server crop request. Omitted means an old client already prepared the image.",
+    )
 
 
 class JudgeResponse(BaseModel):
@@ -95,6 +103,45 @@ class JudgeResponse(BaseModel):
     vlmLatencyMs: int = Field(..., description="서버가 잰 모델 호출 시간")
     promptVersion: str
     backend: str
+    timing: Optional["JudgeTiming"] = None
+
+
+class JudgeTiming(BaseModel):
+    serverHandlerMs: int
+    validationMs: int
+    currentCropMs: int
+    startCropMs: int
+    cropTotalMs: int
+    judgeSetupMs: int
+    promptBuildMs: int
+    vlmWallMs: int
+    otherMs: int
+    currentCropMode: str
+    startCropMode: Optional[str] = None
+    currentDetectionCount: int = 0
+    startDetectionCount: Optional[int] = None
+
+
+class CropPreviewRequest(BaseModel):
+    image: str = Field(..., description="base64 JPEG")
+    cropTarget: CropTarget
+
+
+class CropPreviewTiming(BaseModel):
+    serverHandlerMs: int
+    validationMs: int
+    cropMs: int
+    otherMs: int
+
+
+class CropPreviewResponse(BaseModel):
+    croppedImage: str
+    cropMode: str
+    cropTarget: CropTarget
+    detectionCount: int
+    width: int
+    height: int
+    timing: CropPreviewTiming
 
 
 class RecipeExtractionRequest(BaseModel):
@@ -120,7 +167,11 @@ async def authenticate_judge_step_before_body_validation(request: Request, call_
     알 수 있다. 계약의 401/403 우선순위를 지키기 위해 이 경로만 미리
     인증하고, 실패 응답도 계약의 `{\"detail\": \"문자열\"}` 형태로 만든다.
     """
-    if request.method == "POST" and request.url.path in {"/judge-step", "/extract-recipe"}:
+    if request.method == "POST" and request.url.path in {
+        "/judge-step",
+        "/debug/crop-preview",
+        "/extract-recipe",
+    }:
         try:
             check_auth(request.headers.get("authorization"))
         except HTTPException as exc:
@@ -202,6 +253,7 @@ def root():
         "endpoints": {
             "GET  /health": "상태 확인 · 환경변수 점검 · 워밍업",
             "POST /judge-step": "단계 완료 판정 (CONTRACT.md 참조)",
+            "POST /debug/crop-preview": "VLM 없이 서버 YOLO 크롭 결과 확인",
             "POST /extract-recipe": "YouTube 자막에서 레시피 초안 추출",
             "GET  /docs": "API 문서 (브라우저로 열어보세요)",
         },
@@ -251,6 +303,7 @@ def health():
             "proxyConfigured": bool(os.getenv("YOUTUBE_PROXY_URL")),
             "model": os.getenv("RECIPE_EXTRACTION_MODEL") or DEFAULT_RECIPE_EXTRACTION_MODEL,
         },
+        "roiCrop": cropper_status(),
     }
 
 
@@ -274,6 +327,54 @@ def extract_recipe_from_youtube(req: RecipeExtractionRequest):
     return result
 
 
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
+@app.post("/debug/crop-preview", response_model=CropPreviewResponse)
+def debug_crop_preview(req: CropPreviewRequest):
+    """Return the exact server crop without invoking the paid VLM."""
+    handler_started = time.perf_counter()
+
+    validation_started = time.perf_counter()
+    image_b64 = _validate_image(req.image, "image")
+    validation_ms = _elapsed_ms(validation_started)
+
+    crop_started = time.perf_counter()
+    try:
+        cropped_b64, decision = prepare_judge_image(image_b64, req.cropTarget)
+    except (OSError, ValueError) as error:
+        raise HTTPException(400, f"server crop image decode failed: {error}") from error
+    crop_ms = _elapsed_ms(crop_started)
+
+    cropped_bytes = base64.b64decode(cropped_b64, validate=True)
+    with Image.open(io.BytesIO(cropped_bytes)) as cropped_image:
+        width, height = cropped_image.size
+
+    server_handler_ms = _elapsed_ms(handler_started)
+    other_ms = max(0, server_handler_ms - validation_ms - crop_ms)
+    print(
+        f"[roi-preview] target={req.cropTarget} mode={decision.mode} "
+        f"detections={decision.detection_count} crop={crop_ms}ms "
+        f"total={server_handler_ms}ms",
+        flush=True,
+    )
+    return CropPreviewResponse(
+        croppedImage=cropped_b64,
+        cropMode=decision.mode,
+        cropTarget=req.cropTarget,
+        detectionCount=decision.detection_count,
+        width=width,
+        height=height,
+        timing=CropPreviewTiming(
+            serverHandlerMs=server_handler_ms,
+            validationMs=validation_ms,
+            cropMs=crop_ms,
+            otherMs=other_ms,
+        ),
+    )
+
+
 @app.post("/judge-step", response_model=JudgeResponse)
 def judge_step(
     req: JudgeRequest,
@@ -281,6 +382,7 @@ def judge_step(
     x_mock_delay_ms: Optional[int] = Header(None, alias="X-Mock-Delay-Ms"),
     x_mock_status: Optional[int] = Header(None, alias="X-Mock-Status"),
 ):
+    handler_started = time.perf_counter()
     # ── Mock 경로 (2번의 분기 테스트용) ──────────────────
     # 헤더 하나로 원하는 응답을 강제로 받을 수 있다.
     #   X-Mock-Verdict: CANNOT_TELL   → 그 판정을 그대로 반환
@@ -325,15 +427,40 @@ def judge_step(
             400, "TIME_ONLY 단계는 서버를 호출하지 않습니다 (CONTRACT.md §3.1). "
                  "앱의 로컬 타이머로 처리하세요.")
 
+    validation_started = time.perf_counter()
     current_b64 = _validate_image(req.currentImage, "currentImage")
     start_b64 = _validate_image(req.startImage, "startImage") if req.startImage else None
+    validation_ms = _elapsed_ms(validation_started)
 
+    current_crop_started = time.perf_counter()
+    try:
+        current_b64, current_crop = prepare_judge_image(current_b64, req.cropTarget)
+        current_crop_ms = _elapsed_ms(current_crop_started)
+        if start_b64 is not None:
+            start_crop_started = time.perf_counter()
+            start_b64, start_crop = prepare_judge_image(start_b64, req.cropTarget)
+            start_crop_ms = _elapsed_ms(start_crop_started)
+        else:
+            start_crop = None
+            start_crop_ms = 0
+    except (OSError, ValueError) as error:
+        raise HTTPException(400, f"server crop image decode failed: {error}") from error
+    print(
+        f"[roi-crop] req={req.requestId} target={req.cropTarget or 'CLIENT_PREPARED'} "
+        f"current={current_crop.mode} "
+        f"start={start_crop.mode if start_crop else '-'}",
+        flush=True,
+    )
+
+    judge_setup_started = time.perf_counter()
     try:
         judge = get_judge()
     except JudgeConfigError as e:
         # 설정 문제는 재시도해도 소용없다. 500 으로 분명히 구분한다.
         raise HTTPException(500, str(e))
+    judge_setup_ms = _elapsed_ms(judge_setup_started)
 
+    prompt_started = time.perf_counter()
     user_text = prompts.build_user_text(
         instruction=req.instruction,
         check_type=req.checkType,
@@ -342,7 +469,9 @@ def judge_step(
         has_start=start_b64 is not None,
         step_order=req.stepOrder,
     )
+    prompt_build_ms = _elapsed_ms(prompt_started)
 
+    vlm_started = time.perf_counter()
     try:
         v = judge.judge(
             system=prompts.SYSTEM_PROMPT,
@@ -356,14 +485,39 @@ def judge_step(
         #    와이파이가 끊겼을 뿐인데 F4-5(3회 → 수동 모드)에 걸린다.
         print(f"[judge] req={req.requestId} FAIL {type(e).__name__}: {e}", flush=True)
         raise HTTPException(getattr(e, "http_status", 503), str(e))
+    vlm_wall_ms = _elapsed_ms(vlm_started)
 
     _log(req, v, judge)
+    server_handler_ms = _elapsed_ms(handler_started)
+    crop_total_ms = current_crop_ms + start_crop_ms
+    measured_ms = (
+        validation_ms
+        + crop_total_ms
+        + judge_setup_ms
+        + prompt_build_ms
+        + vlm_wall_ms
+    )
     return JudgeResponse(
         verdict=v.verdict,
         reasonCode=v.reasonCode,
         vlmLatencyMs=v.latencyMs,
         promptVersion=PROMPT_VERSION,
         backend=judge.name,
+        timing=JudgeTiming(
+            serverHandlerMs=server_handler_ms,
+            validationMs=validation_ms,
+            currentCropMs=current_crop_ms,
+            startCropMs=start_crop_ms,
+            cropTotalMs=crop_total_ms,
+            judgeSetupMs=judge_setup_ms,
+            promptBuildMs=prompt_build_ms,
+            vlmWallMs=vlm_wall_ms,
+            otherMs=max(0, server_handler_ms - measured_ms),
+            currentCropMode=current_crop.mode,
+            startCropMode=start_crop.mode if start_crop else None,
+            currentDetectionCount=current_crop.detection_count,
+            startDetectionCount=start_crop.detection_count if start_crop else None,
+        ),
     )
 
 

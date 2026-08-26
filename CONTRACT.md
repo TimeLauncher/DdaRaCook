@@ -2,12 +2,12 @@
 
 > **이 문서는 지침입니다. 다만 여기 적힌 필드·URL·오류 코드는 앱과 서버가 동시에 맞아야 하는 배선입니다.**
 > 바꾸는 건 자유지만 **한쪽만 바꾸면 런타임에 깨집니다** — 앱과 서버를 같은 PR에서 고치고, 아래 변경 이력에 한 줄 남기세요.
-> 담당: 3번 · 사용: 2번(앱) · 버전 1.5
+> 담당: 3번 · 사용: 2번(앱) · 버전 1.11
 
 > ✅ **2026-08-10 (T1-4): 실제 AI 판정이 연결되었습니다.**
 > Mock 헤더(§6)는 그대로 살아 있으니 기존 테스트는 계속 쓰시면 됩니다.
 > 헤더를 빼면 진짜 판정이 옵니다 — 이때는 **진짜 JPEG**를 보내야 합니다(§5의 400 참조).
-> 요청/응답 필드는 **하나도 바뀌지 않았습니다.**
+> v1.6의 `cropTarget`은 선택 필드입니다. 보내지 않는 기존 앱의 이미지는 서버가 다시 크롭하지 않습니다.
 
 ---
 
@@ -15,6 +15,7 @@
 
 ```
 POST  {BASE_URL}/judge-step
+POST  {BASE_URL}/debug/crop-preview  # 인증 필요 · VLM 없이 서버 YOLO 결과 확인
 POST  {BASE_URL}/extract-recipe
 GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
 ```
@@ -52,7 +53,8 @@ GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
   "checkCondition": "팬 안의 양파가 흰색/불투명에서 반투명하게 변했는가",
   "elapsedSeconds": 260,
   "startImage": "<base64 JPEG 또는 null>",
-  "currentImage": "<base64 JPEG>"
+  "currentImage": "<base64 JPEG>",
+  "cropTarget": "AUTO_ROI"
 }
 ```
 
@@ -67,6 +69,7 @@ GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
 | `elapsedSeconds` | int | ✅ | 단계 시작 후 경과 **초** |
 | `startImage` | string \| **null** | ❌ | base64 JPEG. §3.2 규칙 참조 |
 | `currentImage` | string | ✅ | base64 JPEG |
+| `cropTarget` | enum | ❌ | `AUTO_ROI` · `CUTTING_BOARD_ROI` · `PAN_COOKING_ROI` · `LEGACY_BOTTOM_60` · `NO_CROP`. 아래 §3.3 참조. 생략하면 기존 앱이 이미 정규화한 이미지로 간주 |
 
 ### 3.1 `checkType` 값
 
@@ -94,29 +97,32 @@ GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
 > 유형 기준을 택했던 이유(2장이면 페이로드 2배라 3초를 압박)는 실측에서 근거가 약했습니다 —
 > **1장 3511ms vs 2장 3648ms, 차이 137ms.** 지연의 지배 요인은 페이로드가 아니라 추론 시간입니다.
 
-### 3.3 이미지 규격 (1번 담당)
+### 3.3 이미지 규격 (1번·3번 공동)
 
-공통 규격은 같고, 크롭 여부만 판정 모드에 따라 다릅니다.
+자동 모드 앱은 회전이 반영된 전체 시야에서 폰 YOLO로 관심 영역을 크롭한 뒤
+`cropTarget=NO_CROP`으로 전송합니다. 폰 크롭이 실패한 경우에만 전체 시야와 원래
+`cropTarget`을 보내 서버 YOLO가 같은 규격으로 fallback합니다.
+
+`AUTO_ROI`는 레시피가 도마·팬을 미리 고르지 않아도 두 대상의 검출 후보를 모두 비교해
+시선 기준점에 가장 가까운 것을 선택합니다. 선택된 실제 클래스가 도마면 4:3, 팬·웍이면
+1:1로 크롭합니다. 새 사용자 작성·YouTube 추출 레시피의 자동 판정 단계는 이 값을 기본으로
+사용하고, 내장 레시피의 명시적인 도마·팬 값은 선택 힌트로 유지합니다.
 
 | 항목 | 자동 모드 카메라 | 수동 모드 |
 |---|---|---|
+| 앱 전처리 | 전체 프레임 · 긴 변 최대 1365px → 폰 YOLO 크롭 | 크롭 없음 · 긴 변 최대 1024px |
+| `cropTarget` | 성공 시 `NO_CROP`, 폰 크롭 실패 시 원래 ROI 값 | `NO_CROP` |
+| 최종 규격 | 도마 `768×576` · 팬 `768×768` · fallback은 아래 60% 후 긴 변 최대 768px | 입력 그대로 사용 |
 | 포맷 | JPEG, quality 80 | JPEG, quality 80 |
-| 크롭 | **위 40% 제거** | **크롭하지 않음** |
-| 해상도 | 긴 변이 1024px보다 크면 1024px로 축소 | 긴 변이 1024px보다 크면 1024px로 축소 |
-| 작은 이미지 | 확대하지 않음 | 확대하지 않음 |
-| **회전** | **픽셀에 반영 후 EXIF 제거** | **픽셀에 반영 후 EXIF 제거** |
+| **회전** | 앱에서 **픽셀에 반영 후 EXIF 제거** | 앱에서 **픽셀에 반영 후 EXIF 제거** |
 | 색공간 | sRGB | sRGB |
 | 인코딩 | base64 (표준, 줄바꿈 없음) | base64 (표준, 줄바꿈 없음) |
-| 정규화 위치 | 1번 모듈에서 1회만 | 1번 모듈에서 1회만 |
 
-수동 모드에서 갤러리로 고른 `startImage`와 `currentImage` 모두 수동 모드 규격을 적용합니다.
-
-> 📐 **실측 (2026-08-13)**: 3024×4032 원본 → `1024×819` · 2장 base64 **464KB**.
-> 상단 40%는 1인칭 화각에서 벽·조리도구뿐이며, 버리면 판정 대상이 커지고(팬 268px → 358px)
-> 배경 잡음이 사라집니다. `server/testdata/raw` 16장 전부에서 크롭 후 대상 생존을 확인했습니다.
->
-> ⏱️ 464KB는 3번의 지연 기준선(319KB → 3.8초 · 타임아웃 2/5)보다 큽니다.
-> 2회차 평가에서 지연을 함께 재고, 빡빡하면 **크롭 비율은 두고 긴 변만 768로** 내립니다.
+`startImage`와 `currentImage`에는 같은 ROI 규칙을 적용합니다. 폰 YOLO 모델 로드·추론 자체가
+실패하면 전체 프레임을 서버에 보내 서버 YOLO로 재시도합니다. 폰 또는 서버에서 시선 기준점
+부근에 대상이 없으면 요청을 실패시키지 않고 기존 **아래 60%** 크롭으로 fallback합니다.
+`cropTarget`을 생략한 v1.5 이하 앱은 이미 위 40%를 제거한 것으로 간주해 서버에서
+byte-for-byte 그대로 사용하므로 이중 크롭되지 않습니다.
 
 ---
 
@@ -128,7 +134,22 @@ GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
   "reasonCode": "VISIBLE_CHANGE",
   "vlmLatencyMs": 1840,
   "promptVersion": "v1",
-  "backend": "nemotron"
+  "backend": "nemotron",
+  "timing": {
+    "serverHandlerMs": 1925,
+    "validationMs": 3,
+    "currentCropMs": 74,
+    "startCropMs": 0,
+    "cropTotalMs": 74,
+    "judgeSetupMs": 0,
+    "promptBuildMs": 0,
+    "vlmWallMs": 1842,
+    "otherMs": 6,
+    "currentCropMode": "YOLO_ROI",
+    "startCropMode": null,
+    "currentDetectionCount": 3,
+    "startDetectionCount": null
+  }
 }
 ```
 
@@ -139,11 +160,24 @@ GET   {BASE_URL}/health          # 배포 확인 · 시연 전 워밍업
 | `vlmLatencyMs` | int | **서버가 잰 모델 호출 시간** |
 | `promptVersion` | string | 평가 추적용 |
 | `backend` | string | 어느 모델이 판정했는지 |
+| `timing` | object \| null | 서버 구간별 지연과 실제 crop mode. 구버전 호환을 위해 앱은 생략을 허용 |
 
 > ⚠️ **앱은 모르는 `reasonCode` 값이 와도 크래시하지 않아야 합니다.** 미지의 값은 `OTHER`로 처리하세요.
 
-> ⚠️ **`vlmLatencyMs` ≠ 앱의 `roundTripMs`.** 서버가 잰 모델 시간과 앱이 잰 전체 왕복은 다른 값입니다.
-> 이름을 분리하지 않으면 평가할 때 반드시 섞입니다. 둘의 차이가 네트워크 구간입니다.
+> ⚠️ **`vlmLatencyMs` ≠ 앱의 `roundTripMs`.** 서버가 잰 모델 시간과 앱의 이미지 준비·재시도·HTTP·응답 해석을
+> 모두 포함한 총 체감시간은 다른 값입니다. `HTTP 왕복 - timing.serverHandlerMs`는 네트워크뿐 아니라
+> FastAPI 본문 파싱과 응답 직렬화도 포함하므로 앱에서는 `전송·프레임워크 추정`으로 표시합니다.
+
+### 4.1 Debug YOLO 크롭 미리보기
+
+`POST /debug/crop-preview`는 `Authorization`이 필요하며 VLM을 호출하지 않습니다.
+
+```json
+{ "image": "<base64 JPEG>", "cropTarget": "PAN_COOKING_ROI" }
+```
+
+응답은 실제 판정 직전 JPEG인 `croppedImage`와 `cropMode`, `detectionCount`, `width`, `height`,
+`timing(serverHandlerMs · validationMs · cropMs · otherMs)`을 반환합니다. 앱은 Debug 빌드에서만 이 기능을 노출합니다.
 
 ---
 
@@ -311,6 +345,12 @@ X-Mock-Status:  503           ×3   → 수동 모드로 전환되면 안 됨 �
 | 1.3 | 2026-08-14 | **§3.2 개정** — `startImage` 정책을 `checkType` 기준에서 "완료 조건이 시작 대비 변화를 묻는가" 기준으로. 기준 사진은 단계 시작 15초 뒤 촬영 |
 | 1.4 | 2026-08-19 | **§3.3 개정** — 수동 모드는 크롭 없이 긴 변 1024px로만 축소. JPEG q80·회전 반영·EXIF 제거·sRGB는 공통 유지 |
 | 1.5 | 2026-08-24 | `/extract-recipe` 추가 — YouTube 자막을 현재 앱 `Recipe` 초안으로 변환하고 편집 후 저장 |
+| 1.6 | 2026-08-25 | 선택 필드 `cropTarget` 추가 · 자동 카메라는 전체 프레임을 보내고 서버 YOLO가 도마/팬 ROI를 규격화 · 실패 시 기존 아래 60%로 fallback |
+| 1.7 | 2026-08-25 | `/debug/crop-preview` 추가 · `/judge-step`에 선택 응답 `timing` 추가 · 앱 총 지연을 전처리/HTTP/서버 검증/YOLO/VLM/기타로 분리 |
+| 1.8 | 2026-08-25 | 자동 카메라 ROI 크롭을 폰 ONNX Runtime으로 이동 · 성공 시 `NO_CROP` 전송 · 폰 런타임 실패 시 서버 YOLO fallback 유지 |
+| 1.9 | 2026-08-25 | 도마·팬 ROI의 bbox 바깥 추가 여백을 22%에서 0%로 제거해 판정 대상을 최대한 크게 유지 |
+| 1.10 | 2026-08-26 | VLM 입력 지연을 줄이기 위해 자동 ROI 출력을 도마 `768×576`·팬 `768×768`, fallback 긴 변 768px로 축소 |
+| 1.11 | 2026-08-26 | `AUTO_ROI` 추가 — 새 사용자·YouTube 추출 레시피는 도마·팬 전체 후보 중 시선에 가장 가까운 ROI를 폰에서 자동 선택. 기존 사용자 레시피와 내장 기본값은 fixture v12에서 이 정책으로 이관 |
 
 > **1.1은 추가만 있고 변경·삭제가 없습니다.** 요청/응답 필드, URL, 인증 방식이
 > 그대로이므로 기존 클라이언트 코드는 수정 없이 동작합니다.

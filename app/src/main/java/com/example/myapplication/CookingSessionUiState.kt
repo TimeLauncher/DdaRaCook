@@ -3,6 +3,8 @@ package com.example.myapplication
 import com.example.myapplication.camera.CaptureFailureKind
 import com.example.myapplication.camera.CaptureOutcome
 import com.example.myapplication.camera.WearableCameraState
+import com.example.myapplication.judgment.CropPreviewResult
+import com.example.myapplication.judgment.JudgmentTimingBreakdown
 
 enum class AppScreen {
     S0_SERVICE_HOME,
@@ -23,6 +25,12 @@ data class PendingAnnouncement(
     val message: String
 )
 
+data class CropPreviewUiState(
+    val isLoading: Boolean = false,
+    val result: CropPreviewResult? = null,
+    val error: String? = null
+)
+
 data class CookingSessionUiState(
     val recipes: List<Recipe>,
     val selectedRecipeId: String = recipes.firstOrNull()?.id.orEmpty(),
@@ -39,6 +47,8 @@ data class CookingSessionUiState(
     val deviceHint: String = "가짜 안경 게이트웨이를 사용 중입니다.",
     val nextInspectionInSeconds: Int? = null,
     val judgingInFlight: Boolean = false,
+    val cropPreview: CropPreviewUiState = CropPreviewUiState(),
+    val lastJudgmentTiming: JudgmentTimingBreakdown? = null,
     val judgeError: String? = null,
     val speechError: String? = null,
     val lastVoiceTranscript: String? = null,

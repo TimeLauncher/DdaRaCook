@@ -41,7 +41,7 @@
 | 촬영 **1↔2** | `camera/CameraContracts.kt` | Meta DAT 타입은 `camera/` 밖으로 나가지 않음. 모든 실패는 `CaptureOutcome.Failure`로만 전달 |
 | 판정 **2↔3** | [`CONTRACT.md`](CONTRACT.md) | 요청·응답 필드를 바꾸면 **앱과 서버를 같은 PR에서** 고칩니다 — 한쪽만 배포하면 깨집니다. `CheckType` 값 **추가**는 4곳을 함께(앱 enum · `toServerType()` · 서버 `Literal` · `CHECK_TYPE_HINT`), 값 **이름 변경·삭제는 금지** — 저장된 사용자 레시피가 파싱에 실패해 조용히 사라집니다 |
 | 레시피 **2↔3** | `RecipeFixtures.kt` | **레시피의 정본은 코드입니다.** 문장·`checkType`·단계 수·`InspectionPolicy` 모두 3번이 정하고, 기능명세서 §5.1.1 표는 참고용이라 나중에 따라오면 됩니다. 단계 수나 인덱스를 바꾸면 `FakeJudgmentGatewayTest`의 단언과 저장된 세션이 함께 어긋나니 그 둘을 같이 고칩니다. 편집기 UI(`MainActivity`)·저장(`AppPersistence`)·네트워크 배관은 2번 |
-| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 | JPEG q80 · **위 40% 제거 후 긴 변 1024px** · 회전을 픽셀에 반영 후 EXIF 제거. 정규화는 1번에서 1회만(`judgment/ImageNormalizer.kt`). 규격 감사는 `server/inspect_image.py` |
+| 이미지 **1↔3** | [`CONTRACT.md`](CONTRACT.md) §3.3 | 앱은 JPEG q80 · 회전 픽셀 반영 · EXIF 제거 후 자동 촬영 전체 시야를 긴 변 1365px로 전달. 서버는 `cropTarget`에 따라 도마/팬 YOLO ROI를 규격화하고 실패 시 아래 60%로 fallback. 수동은 `NO_CROP` · 긴 변 1024px |
 
 내 담당 밖을 건드려야 하면 **3번 허가를 받고 진행**합니다. 담당자 동의를 기다리지 않고, 바꾼 뒤 알립니다. `app/`↔`server/`를 넘을 때는 브랜치 + PR로 처리합니다. 권한이 애매하면 멈추지 말고 3번에게 물어본 뒤 진행합니다.
 

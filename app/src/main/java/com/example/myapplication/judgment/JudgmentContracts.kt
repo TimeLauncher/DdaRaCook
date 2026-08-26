@@ -1,12 +1,13 @@
 package com.example.myapplication.judgment
 
 import com.example.myapplication.CheckType
+import com.example.myapplication.ImageCropTarget
 import com.example.myapplication.ReasonCode
 import com.example.myapplication.JudgmentVerdict
 import kotlinx.coroutines.flow.StateFlow
 
 enum class JudgmentImagePolicy {
-    /** 자동 카메라: 상단 40%를 제거한 뒤 긴 변을 최대 1024px로 축소한다. */
+    /** 자동 카메라: 폰 YOLO에 쓸 전체 시야를 긴 변 최대 1365px로 준비한다. */
     AUTOMATIC_CAMERA,
 
     /** 수동 모드: 크롭 없이 긴 변만 최대 1024px로 축소한다. */
@@ -27,6 +28,7 @@ data class JudgmentRequest(
     val baselineImageUri: String?,
     val currentImageUri: String,
     val imagePolicy: JudgmentImagePolicy = JudgmentImagePolicy.AUTOMATIC_CAMERA,
+    val cropTarget: ImageCropTarget = ImageCropTarget.AUTO_ROI,
     val requestedAtMs: Long = System.currentTimeMillis()
 )
 
@@ -38,9 +40,65 @@ data class JudgmentResult(
     val reasonCode: ReasonCode,
     val roundTripMs: Long,
     val vlmLatencyMs: Long? = null,
+    val timing: JudgmentTimingBreakdown? = null,
     val requestedAtMs: Long = 0L,
     val respondedAtMs: Long = System.currentTimeMillis()
 )
+
+data class JudgmentTimingBreakdown(
+    val totalMs: Long,
+    val imagePreparationMs: Long,
+    val httpRoundTripMs: Long,
+    val responseParseMs: Long,
+    val retryBackoffMs: Long,
+    val serverHandlerMs: Long,
+    val serverValidationMs: Long,
+    val currentCropMs: Long,
+    val startCropMs: Long,
+    val cropTotalMs: Long,
+    val localModelLoadMs: Long,
+    val localPreprocessMs: Long,
+    val localInferenceMs: Long,
+    val localPostprocessMs: Long,
+    val localEncodeMs: Long,
+    val serverCropTotalMs: Long,
+    val judgeSetupMs: Long,
+    val promptBuildMs: Long,
+    val vlmWallMs: Long,
+    val serverOtherMs: Long,
+    val transportAndFrameworkMs: Long,
+    val currentCropMode: String,
+    val startCropMode: String? = null,
+    val currentDetectionCount: Int = 0,
+    val startDetectionCount: Int? = null,
+    val serverCurrentCropMode: String? = null
+)
+
+data class CropPreviewTiming(
+    val totalMs: Long,
+    val imagePreparationMs: Long,
+    val modelLoadMs: Long,
+    val preprocessMs: Long,
+    val inferenceMs: Long,
+    val postprocessMs: Long,
+    val encodeMs: Long
+)
+
+data class CropPreviewResult(
+    val sourceImageUri: String,
+    val croppedImageBase64: String,
+    val cropMode: String,
+    val cropTarget: ImageCropTarget,
+    val detectionCount: Int,
+    val width: Int,
+    val height: Int,
+    val timing: CropPreviewTiming
+)
+
+sealed interface CropPreviewOutcome {
+    data class Success(val result: CropPreviewResult) : CropPreviewOutcome
+    data class Failure(val message: String) : CropPreviewOutcome
+}
 
 sealed interface JudgmentOutcome {
     data class Success(val result: JudgmentResult) : JudgmentOutcome

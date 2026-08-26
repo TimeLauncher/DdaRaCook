@@ -9,7 +9,8 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
 
     fun loadRecipes(fallback: List<Recipe>): List<Recipe> = runCatching {
         val raw = preferences.getString(KEY_RECIPES, null) ?: return fallback
-        val stored = JSONArray(raw).toRecipeList()
+        val parsed = JSONArray(raw).toRecipeList()
+        val stored = parsed.withAutomaticCropForUserRecipes()
         if (preferences.getInt(KEY_FIXTURE_VERSION, 0) < CURRENT_FIXTURE_VERSION) {
             val builtInIds = fallback.mapTo(mutableSetOf(), Recipe::id)
             val migrated = fallback + stored.filterNot { it.id in builtInIds }
@@ -29,7 +30,9 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
             }
             migrated
         } else {
-            stored.ifEmpty { fallback }
+            val loaded = stored.ifEmpty { fallback }
+            if (stored != parsed) saveRecipes(loaded)
+            loaded
         }
     }.getOrDefault(fallback)
 
@@ -104,13 +107,35 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_VIEWED_RECIPE_IDS = "viewed_recipe_ids"
         const val KEY_VOICE_GUIDANCE_ENABLED = "voice_guidance_enabled"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 10
+        const val CURRENT_FIXTURE_VERSION = 12
     }
 }
 
 private fun Recipe.isSessionCompatibleWith(other: Recipe): Boolean =
-    steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition) } ==
-        other.steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition) }
+    steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition, it.imageCropTarget) } ==
+        other.steps.map { listOf(it.order, it.instruction, it.checkType, it.checkCondition, it.imageCropTarget) }
+
+/**
+ * User-authored/imported recipes created before AUTO_ROI existed were silently saved as
+ * LEGACY_BOTTOM_60 because the editor and extraction parser had no crop field. The UI never
+ * offered an explicit legacy choice, so those automatic steps can be migrated without
+ * overwriting user intent. Built-in fixtures keep their curated explicit targets.
+ */
+private fun List<Recipe>.withAutomaticCropForUserRecipes(): List<Recipe> = map { recipe ->
+    if (!recipe.id.startsWith("recipe-")) {
+        recipe
+    } else {
+        recipe.copy(
+            steps = recipe.steps.map { step ->
+                if (step.isAutoCheck && step.imageCropTarget == ImageCropTarget.LEGACY_BOTTOM_60) {
+                    step.copy(imageCropTarget = ImageCropTarget.AUTO_ROI)
+                } else {
+                    step
+                }
+            }
+        )
+    }
+}
 
 private fun List<Recipe>.toJson() = JSONArray().also { array ->
     forEach { recipe ->
@@ -135,6 +160,7 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
                         put("targetIngredients", JSONArray(step.targetIngredients))
                         put("voicePrompt", step.voicePrompt)
                         put("isAutoCheck", step.isAutoCheck)
+                        put("imageCropTarget", step.imageCropTarget.name)
                         put("waitsForParallelTimer", step.waitsForParallelTimer)
                         put("baselineOnStepStart", step.baselineOnStepStart)
                         step.parallelTimer?.let { timer ->
@@ -192,6 +218,7 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                 }
                 val targetsJson = step.getJSONArray("targetIngredients")
                 val checkType = enumValueOf<CheckType>(step.getString("checkType"))
+                val isAutoCheck = step.getBoolean("isAutoCheck")
                 add(
                     RecipeStep(
                         order = stepIndex + 1,
@@ -203,7 +230,12 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                         inspectionPolicy = policy,
                         targetIngredients = List(targetsJson.length()) { targetsJson.getString(it) },
                         voicePrompt = step.getString("voicePrompt"),
-                        isAutoCheck = step.getBoolean("isAutoCheck"),
+                        isAutoCheck = isAutoCheck,
+                        imageCropTarget = runCatching {
+                            enumValueOf<ImageCropTarget>(step.optString("imageCropTarget"))
+                        }.getOrDefault(
+                            if (isAutoCheck) ImageCropTarget.AUTO_ROI else ImageCropTarget.LEGACY_BOTTOM_60
+                        ),
                         parallelTimer = parallelTimer,
                         waitsForParallelTimer = step.optBoolean("waitsForParallelTimer"),
                         baselineOnStepStart = step.optBoolean("baselineOnStepStart")

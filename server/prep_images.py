@@ -3,6 +3,7 @@ T2-1 · `raw/` → `images/` 정규화본 생성
 
     python prep_images.py                 # testdata/manifest.json 대로 생성
     python prep_images.py --long-edge 1024
+    python prep_images.py --copy-original # 이름만 pairId 규격으로 맞추고 픽셀은 보존
     python prep_images.py --check         # 만들지 않고 계획만 출력
 
 **`raw/` 는 절대 건드리지 않습니다.** 여기서 하는 일은 `imageprep.prepare()` 로
@@ -56,8 +57,17 @@ def main() -> int:
                    help="P3→sRGB 를 산출물에 굽는다. 기본은 끔 — "
                         "eval.py --srgb 로 A/B 하려면 켜지 마세요")
     p.add_argument("--quality", type=int, default=80)
+    p.add_argument(
+        "--copy-original",
+        action="store_true",
+        help="리사이즈·재인코딩 없이 원본 bytes 를 그대로 복사한다. "
+             "eval.py 에서 crop/resize A/B 를 적용할 때 사용",
+    )
     p.add_argument("--check", action="store_true", help="쓰지 않고 계획만 출력")
     args = p.parse_args()
+
+    if args.copy_original and args.srgb:
+        p.error("--copy-original 과 --srgb 는 함께 사용할 수 없습니다")
 
     base = os.path.dirname(os.path.abspath(args.manifest))
     raw_dir = args.raw or os.path.join(base, "raw")
@@ -101,8 +111,14 @@ def main() -> int:
     print(f"manifest : {args.manifest}  ({len(rows)}쌍 · 파일 {len(plan)}개)")
     print(f"raw      : {raw_dir}   (읽기 전용)")
     print(f"images   : {img_dir}")
-    print(f"규격     : 긴 변 {args.long_edge}px · quality {args.quality}"
-          f" · sRGB 변환 {'ON (굽는다)' if args.srgb else 'OFF (P3 보존)'}")
+    long_edge = None if args.copy_original else args.long_edge
+    spec = (
+        "원본 bytes 보존 (crop/resize 는 eval.py 에서 수행)"
+        if args.copy_original
+        else f"긴 변 {args.long_edge}px · quality {args.quality}"
+             f" · sRGB 변환 {'ON (굽는다)' if args.srgb else 'OFF (P3 보존)'}"
+    )
+    print(f"규격     : {spec}")
     print("-" * 72)
 
     if args.check:
@@ -113,7 +129,7 @@ def main() -> int:
     os.makedirs(img_dir, exist_ok=True)
     total = 0
     for pid, role, src, dst in plan:
-        data = imageprep.prepare(src, long_edge=args.long_edge,
+        data = imageprep.prepare(src, long_edge=long_edge,
                                  srgb=args.srgb, quality=args.quality)
         with open(dst, "wb") as f:
             f.write(data)

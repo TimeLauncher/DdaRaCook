@@ -27,6 +27,15 @@ data class Ingredient(
     val amount: String
 )
 
+enum class ImageCropTarget {
+    /** Detect every supported cooking ROI and choose the one nearest the wearer gaze. */
+    AUTO_ROI,
+    /** Existing automatic-camera behavior, now applied by the server. */
+    LEGACY_BOTTOM_60,
+    CUTTING_BOARD_ROI,
+    PAN_COOKING_ROI
+}
+
 @Immutable
 data class RecipeStep(
     val order: Int,
@@ -46,6 +55,7 @@ data class RecipeStep(
     val targetIngredients: List<String>,
     val voicePrompt: String,
     val isAutoCheck: Boolean,
+    val imageCropTarget: ImageCropTarget = ImageCropTarget.AUTO_ROI,
     /**
      * 이 단계를 **마칠 때** 켜지는 병렬 타이머 (`ParallelTimer`).
      *

@@ -246,6 +246,32 @@ private fun TtaraCookApp(
             sessionViewModel.judgeGalleryImage(it.toString())
         }
     }
+    val automaticReplayImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            sessionViewModel.judgeAutomaticReplayImage(it.toString())
+        }
+    }
+    val cropPreviewImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            sessionViewModel.previewAutomaticCropImage(it.toString())
+        }
+    }
 
     LaunchedEffect(uiState.currentScreen, uiState.useFakeCamera, uiState.isPresentationSimulation) {
         if (
@@ -447,6 +473,8 @@ private fun TtaraCookApp(
                     onResumeAuto = sessionViewModel::resumeAutoMode,
                     onPickGalleryBaseline = { galleryBaselineLauncher.launch(arrayOf("image/*")) },
                     onPickGalleryCurrent = { galleryCurrentLauncher.launch(arrayOf("image/*")) },
+                    onPickCropPreviewImage = { cropPreviewImageLauncher.launch(arrayOf("image/*")) },
+                    onPickAutomaticReplayImage = { automaticReplayImageLauncher.launch(arrayOf("image/*")) },
                     onRetryJudgment = sessionViewModel::retryLastManualJudgment,
                     onNext = sessionViewModel::continueManualButtonToNextStep,
                     onRepeat = sessionViewModel::repeatCurrentStep,
@@ -640,6 +668,12 @@ private fun RecipeEditorScreen(
             targetIngredients = emptyList(),
             voicePrompt = instruction.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY,
+            imageCropTarget = editingIndex?.let { steps.getOrNull(it)?.imageCropTarget }
+                ?: if (checkType == CheckType.TIMER_ONLY) {
+                    ImageCropTarget.LEGACY_BOTTOM_60
+                } else {
+                    ImageCropTarget.AUTO_ROI
+                },
             // 편집기에는 병렬 타이머 입력이 없다. 편집 중인 단계에 걸려 있던 설정을 지우지 않는다.
             parallelTimer = editingIndex?.let { steps.getOrNull(it)?.parallelTimer },
             waitsForParallelTimer = editingIndex?.let { steps.getOrNull(it)?.waitsForParallelTimer } ?: false,

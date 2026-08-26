@@ -127,4 +127,23 @@ class AppPersistenceInstrumentedTest {
         assertNotNull(migrated.firstOrNull { it.id == "custom-recipe" })
         assertEquals(null, persistence.loadSession())
     }
+
+    @Test
+    fun legacyUserRecipeAutomaticStepsMigrateToAutoRoi() {
+        val source = RecipeFixtures.sampleRecipes().first()
+        val legacyUserRecipe = source.copy(
+            id = "recipe-old-import",
+            steps = listOf(
+                source.steps.first().copy(imageCropTarget = ImageCropTarget.LEGACY_BOTTOM_60),
+                source.steps[1].copy(imageCropTarget = ImageCropTarget.LEGACY_BOTTOM_60)
+            )
+        )
+        persistence.saveRecipes(listOf(legacyUserRecipe))
+
+        val restored = persistence.loadRecipes(emptyList()).single()
+
+        assertEquals(ImageCropTarget.AUTO_ROI, restored.steps[0].imageCropTarget)
+        assertEquals(ImageCropTarget.LEGACY_BOTTOM_60, restored.steps[1].imageCropTarget)
+        assertEquals(ImageCropTarget.AUTO_ROI, persistence.loadRecipes(emptyList()).single().steps[0].imageCropTarget)
+    }
 }

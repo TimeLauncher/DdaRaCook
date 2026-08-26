@@ -15,6 +15,7 @@ import com.example.myapplication.camera.WearableCameraGateway
 import com.example.myapplication.camera.WearableCameraState
 import com.example.myapplication.judgment.FakeJudgmentBehavior
 import com.example.myapplication.judgment.FakeJudgmentGateway
+import com.example.myapplication.judgment.CropPreviewOutcome
 import com.example.myapplication.judgment.ImageNormalizer
 import com.example.myapplication.judgment.JudgmentImagePolicy
 import com.example.myapplication.judgment.JudgmentOutcome
@@ -97,6 +98,9 @@ class CookingSessionViewModel(
         persistence.saveRecipes(initialRecipes)
         networkJudgmentGateway.updateBaseUrl(initialServerBaseUrl)
         recipeImportService.updateBaseUrl(initialServerBaseUrl)
+        viewModelScope.launch(Dispatchers.Default) {
+            networkJudgmentGateway.warmUpLocalCropper()
+        }
         if (!initialUseMockJudgment) checkServerHealth()
     }
 
@@ -110,6 +114,7 @@ class CookingSessionViewModel(
     private var presentationPageAdvanceJob: Job? = null
     private var recipeImportJob: Job? = null
     private var pendingManualInspectionStepOrder: Int? = null
+    private var lastGalleryJudgmentPolicy = JudgmentImagePolicy.MANUAL_MODE
     private var lastNextCommandAtMs = 0L
 
     init {
@@ -810,6 +815,60 @@ class CookingSessionViewModel(
     }
 
     fun judgeGalleryImage(uriValue: String) {
+        judgeSelectedGalleryImage(
+            uriValue = uriValue,
+            imagePolicy = galleryJudgmentImagePolicy(isAutomaticReplay = false)
+        )
+    }
+
+    /**
+     * 디버그 전용 — 갤러리 이미지를 안경 자동 촬영본처럼 실제 서버에 보낸다.
+     *
+     * 수동 갤러리 판정과 달리 전체 시야 1365px 전처리와 단계별 폰 YOLO cropTarget을 사용한다.
+     * 카메라 하드웨어를 제외한 앱 → 폰 YOLO → Render VLM → 상태 전환 경로를 요리 없이 재생한다.
+     */
+    fun judgeAutomaticReplayImage(uriValue: String) {
+        if (!BuildConfig.DEBUG) return
+        judgeSelectedGalleryImage(
+            uriValue = uriValue,
+            imagePolicy = galleryJudgmentImagePolicy(isAutomaticReplay = true)
+        )
+    }
+
+    fun previewAutomaticCropImage(uriValue: String) {
+        if (!BuildConfig.DEBUG) return
+        val state = uiState.value
+        val session = state.session ?: return
+        val step = state.currentStep ?: return
+        if (session.mode != SessionMode.MANUAL_ONLY || state.cropPreview.isLoading) return
+
+        mutableUiState.update {
+            it.copy(cropPreview = CropPreviewUiState(isLoading = true))
+        }
+        viewModelScope.launch {
+            when (val outcome = networkJudgmentGateway.previewCrop(uriValue, step.imageCropTarget)) {
+                is CropPreviewOutcome.Success -> mutableUiState.update {
+                    if (it.currentStep?.order == step.order) {
+                        it.copy(cropPreview = CropPreviewUiState(result = outcome.result))
+                    } else {
+                        it.copy(cropPreview = CropPreviewUiState())
+                    }
+                }
+                is CropPreviewOutcome.Failure -> mutableUiState.update {
+                    if (it.currentStep?.order == step.order) {
+                        it.copy(cropPreview = CropPreviewUiState(error = outcome.message))
+                    } else {
+                        it.copy(cropPreview = CropPreviewUiState())
+                    }
+                }
+            }
+        }
+    }
+
+    private fun judgeSelectedGalleryImage(
+        uriValue: String,
+        imagePolicy: JudgmentImagePolicy
+    ) {
         val state = uiState.value
         val session = state.session ?: return
         val recipe = state.selectedRecipe ?: return
@@ -825,6 +884,7 @@ class CookingSessionViewModel(
             return
         }
 
+        lastGalleryJudgmentPolicy = imagePolicy
         cancelInspectionWork()
         val requestId = UUID.randomUUID().toString()
         mutableUiState.update {
@@ -832,6 +892,7 @@ class CookingSessionViewModel(
             it.copy(
                 currentScreen = AppScreen.S8_MANUAL,
                 judgingInFlight = true,
+                lastJudgmentTiming = null,
                 judgeError = null,
                 session = active.copy(
                     phase = CookingPhase.JUDGING,
@@ -841,7 +902,13 @@ class CookingSessionViewModel(
                 )
             )
         }
-        announceCurrent("선택한 갤러리 사진을 판정 서버로 보내 확인하겠습니다.")
+        announceCurrent(
+            if (imagePolicy == JudgmentImagePolicy.AUTOMATIC_CAMERA) {
+                "선택한 테스트 이미지를 자동 촬영 규격으로 실제 서버에 보내 확인하겠습니다."
+            } else {
+                "선택한 갤러리 사진을 판정 서버로 보내 확인하겠습니다."
+            }
+        )
         viewModelScope.launch {
             val outcome = networkJudgmentGateway.judge(
                 JudgmentRequest(
@@ -858,7 +925,8 @@ class CookingSessionViewModel(
                         .coerceAtLeast(0),
                     baselineImageUri = session.baselineUriByStep[step.order],
                     currentImageUri = uriValue,
-                    imagePolicy = JudgmentImagePolicy.MANUAL_MODE
+                    imagePolicy = imagePolicy,
+                    cropTarget = step.imageCropTarget
                 )
             )
             handleJudgmentOutcome(outcome)
@@ -877,7 +945,7 @@ class CookingSessionViewModel(
             announceCurrent(message)
             return
         }
-        judgeGalleryImage(currentImageUri)
+        judgeSelectedGalleryImage(currentImageUri, lastGalleryJudgmentPolicy)
     }
 
     /**
@@ -1653,6 +1721,7 @@ class CookingSessionViewModel(
                             lastCaptureUriByStep = afterCapture.lastCaptureUriByStep + (request.stepOrder to outcome.artifact.imageUri)
                         ),
                         judgingInFlight = true,
+                        lastJudgmentTiming = null,
                         judgeError = null
                     )
                 }
@@ -1687,6 +1756,7 @@ class CookingSessionViewModel(
                         } ?: 0,
                         baselineImageUri = state.session?.baselineUriByStep?.get(step.order),
                         currentImageUri = outcome.artifact.imageUri,
+                        cropTarget = step.imageCropTarget,
                         imagePolicy = if (state.session?.mode == SessionMode.MANUAL_ONLY) {
                             JudgmentImagePolicy.MANUAL_MODE
                         } else {
@@ -1733,6 +1803,9 @@ class CookingSessionViewModel(
         }
         if (activeSession.activeRequestId != outcomeRequestId) return
         if (outcome is JudgmentOutcome.Success && !isCurrentJudgment(activeSession, current.currentStep?.order, outcome.result)) return
+        if (outcome is JudgmentOutcome.Success) {
+            mutableUiState.update { it.copy(lastJudgmentTiming = outcome.result.timing) }
+        }
         if (activeSession.mode == SessionMode.MANUAL_ONLY) {
             handleManualGalleryJudgmentOutcome(outcome)
             return
@@ -1774,11 +1847,11 @@ class CookingSessionViewModel(
     private fun handleManualGalleryJudgmentOutcome(outcome: JudgmentOutcome) {
         when (outcome) {
             is JudgmentOutcome.Failure -> {
-                mutableUiState.update {
-                    val session = it.session ?: return@update it
-                    it.copy(
-                        currentScreen = AppScreen.S8_MANUAL,
-                        judgingInFlight = false,
+        mutableUiState.update {
+            val session = it.session ?: return@update it
+            it.copy(
+                currentScreen = AppScreen.S8_MANUAL,
+                judgingInFlight = false,
                         judgeError = outcome.message,
                         session = session.copy(
                             phase = CookingPhase.MANUAL_MODE,
@@ -2053,6 +2126,7 @@ class CookingSessionViewModel(
             val session = it.session ?: return@update it
             it.copy(
                 currentScreen = AppScreen.S8_MANUAL,
+                cropPreview = CropPreviewUiState(),
                 session = session.copy(
                     phase = CookingPhase.MANUAL_MODE,
                     mode = SessionMode.MANUAL_ONLY
@@ -2259,6 +2333,9 @@ internal fun galleryJudgmentValidationError(
         "비교 판정에 필요한 시작 사진이 없습니다. 비교 시작 사진을 먼저 불러와주세요."
     else -> null
 }
+
+internal fun galleryJudgmentImagePolicy(isAutomaticReplay: Boolean): JudgmentImagePolicy =
+    if (isAutomaticReplay) JudgmentImagePolicy.AUTOMATIC_CAMERA else JudgmentImagePolicy.MANUAL_MODE
 
 internal fun doneBaselineTarget(
     recipe: Recipe?,
