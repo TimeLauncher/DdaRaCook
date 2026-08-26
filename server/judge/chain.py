@@ -19,8 +19,8 @@
 ## 설정
 
     VLM_BACKEND=chain
-    JUDGE_CHAIN=nemotron,groq       # 앞이 주, 뒤가 백업(여러 개 가능)
-    JUDGE_HEDGE_AFTER_S=4.5         # 이만큼 지나면 백업 동시 발사
+    JUDGE_CHAIN=gemini,groq,nemotron  # 앞이 주, 뒤가 백업(여러 개 가능)
+    JUDGE_HEDGE_AFTER_S=3.0         # 이만큼 지나면 백업 동시 발사
 
 기본 4.5초인 이유는 아래 DEFAULT_HEDGE_AFTER_S 주석 참고 — 백업의 무료
 한도가 임계값을 결정합니다.
@@ -41,13 +41,12 @@ from .base import (
     VlmJudge,
 )
 
-# 헤지 임계값. **백업 무료 한도가 이 값을 결정합니다.**
-# Groq 무료 티어는 8,000 TPM = 판정 분당 2.5회가 상한인데(notes/backup-backend.md),
-# 2.5초로 두면 NVIDIA 정상 응답(실측 2.6~3.8초)에도 매번 헤지가 나가 할당량을
-# 평상시에 다 써버린다. 실측에서 정상 최대가 5.2초, 고장은 11초 이상으로 갈리므로
-# 그 사이인 4.5초에 둔다. 즉 "느린 정상"은 그냥 기다리고 "고장"만 헤지한다.
-# 백업 한도가 넉넉한 벤더(Gemini 등)로 바꾸면 더 낮춰도 된다.
-DEFAULT_HEDGE_AFTER_S = 4.5
+# 헤지 임계값. **주 백엔드의 정상 응답보다 넉넉히 위, 고장 시간보다는 아래.**
+# 낮으면 정상 응답에도 헤지가 나가 백업 무료 한도를 평상시에 다 써버린다
+# (실측: 2.5초로 뒀을 때 매 요청마다 백업이 호출됐다).
+# 기본값 3.0 은 Gemini flash-lite 주력 기준이다 — 정상 p50 1.7초 / 관측 최대 2.4초.
+# 주 백엔드를 바꾸면 이 값도 같이 조정해야 한다(NVIDIA 주력이던 때는 4.5초였다).
+DEFAULT_HEDGE_AFTER_S = 3.0
 DEFAULT_BUDGET_S = 7.5
 
 
@@ -220,7 +219,7 @@ def build_chain_from_env() -> ChainJudge:
     """`JUDGE_CHAIN=nemotron,groq` 를 읽어 체인을 만든다."""
     from . import get_judge  # 순환 import 회피: 호출 시점에 가져온다
 
-    raw = os.getenv("JUDGE_CHAIN", "nemotron,groq")
+    raw = os.getenv("JUDGE_CHAIN", "gemini,groq,nemotron")
     names = [n.strip().lower() for n in raw.split(",") if n.strip()]
     if not names:
         raise JudgeConfigError("JUDGE_CHAIN 이 비어 있습니다.")

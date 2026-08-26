@@ -63,7 +63,10 @@ _VENDOR_DEFAULTS: dict[str, dict[str, str]] = {
     },
     "GEMINI": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "model": "gemini-2.0-flash",
+        # ⚠️ 반드시 flash-**lite**. gemini-2.5/3.5/3.6-flash 는 추론 모델이라
+        #    max_tokens 를 생각에 다 쓰고 판정 JSON 을 못 낸다(실측: 출력 7~8tok,
+        #    7~17초, CANNOT_TELL parsed=False). gemini-2.0-flash 는 폐기됐다(404).
+        "model": "gemini-flash-lite-latest",
         "reasoning_effort": "",
     },
     "OPENAI": {
