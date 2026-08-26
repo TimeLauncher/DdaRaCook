@@ -397,6 +397,18 @@ internal class OnDeviceRoiCropper(context: Context) {
         const val TAG = "OnDeviceRoiCropper"
         const val MODEL_ASSET = "models/yoloe-26n-cook-roi.onnx"
         const val MODEL_INPUT_SIZE = 640
+
+        /**
+         * VLM 입력 해상도.
+         *
+         * 2026-08-26 에 512 로 낮췄다가 768 로 되돌렸다. 512 는 NVIDIA 지연
+         * 대책이었는데 주 백엔드가 Gemini 로 바뀌며 근거가 사라졌고, 정확도
+         * 측정(Gemini 19/21)이 전부 768 기준이다. 서버 roi_cropper.py 참고.
+         *
+         * ⚠️ 서버의 `roi_cropper.ROI_OUTPUT_LONG_EDGE` 와 같은 값이어야 한다.
+         *    폰 YOLO 가 실패해 서버 크롭으로 폴백할 때 두 경로가 다른 크기를
+         *    내면 같은 단계인데 판정 입력이 달라진다.
+         */
         const val ROI_OUTPUT_LONG_EDGE = 768
         const val CHANNELS = 3
         const val JPEG_QUALITY = 80

@@ -62,20 +62,31 @@ def _make_mock() -> VlmJudge:
 
 
 def _make_openai() -> VlmJudge:
-    # T2-5 조건부 태스크. 파일이 없으면 친절하게 알려준다.
-    try:
-        from .openai_backend import OpenAIJudge  # type: ignore
-    except ImportError as e:
-        raise JudgeConfigError(
-            "openai 백엔드는 아직 구현되지 않았습니다 (T2-5 조건부 태스크). "
-            "VLM_BACKEND=nemotron 을 쓰세요."
-        ) from e
+    from .openai_backend import OpenAIJudge
     return OpenAIJudge()
+
+
+def _make_groq() -> VlmJudge:
+    from .openai_backend import GroqJudge
+    return GroqJudge()
+
+
+def _make_gemini() -> VlmJudge:
+    from .openai_backend import GeminiJudge
+    return GeminiJudge()
+
+
+def _make_chain() -> VlmJudge:
+    from .chain import build_chain_from_env
+    return build_chain_from_env()
 
 
 _BACKENDS: dict[str, Callable[[], VlmJudge]] = {
     "nemotron": _make_nemotron,
     "openai": _make_openai,
+    "groq": _make_groq,
+    "gemini": _make_gemini,
+    "chain": _make_chain,
     "mock": _make_mock,
 }
 

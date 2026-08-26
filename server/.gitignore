@@ -1,5 +1,8 @@
 # 🔑 절대 커밋 금지
 .env
+# 백업·변형본까지 막는다 (.env.bak 등에 키가 그대로 남는다)
+.env.*
+!.env.example
 *.key
 secrets/
 

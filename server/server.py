@@ -234,7 +234,8 @@ def _log(req: "JudgeRequest", v, judge) -> None:
     line = (f"[judge] req={req.requestId} step={req.stepOrder} "
             f"type={req.checkType} imgs={'2' if req.startImage else '1'} "
             f"-> {v.verdict}/{v.reasonCode} {v.latencyMs}ms "
-            f"backend={judge.name} prompt={PROMPT_VERSION}")
+            f"backend={getattr(v, 'backend', '') or judge.name} "
+            f"prompt={PROMPT_VERSION}")
     if not v.parsed:
         line += f" ⚠️PARSE_FAIL raw={v.raw[:200]!r}"
     print(line, flush=True)
@@ -502,7 +503,8 @@ def judge_step(
         reasonCode=v.reasonCode,
         vlmLatencyMs=v.latencyMs,
         promptVersion=PROMPT_VERSION,
-        backend=judge.name,
+        # 체인일 때는 실제로 답한 백엔드를 싣는다(chain.py 가 Verdict 에 표시).
+        backend=getattr(v, "backend", "") or judge.name,
         timing=JudgeTiming(
             serverHandlerMs=server_handler_ms,
             validationMs=validation_ms,
