@@ -13,6 +13,52 @@ import org.junit.Test
 
 class CookingDomainTest {
     @Test
+    fun twentyMinuteFilterIncludesBoundaryAndExcludesLongerRecipes() {
+        val source = RecipeFixtures.sampleRecipes().first()
+        val twentyMinutes = source.copy(
+            id = "twenty-minutes",
+            steps = listOf(
+                source.steps.first().copy(
+                    inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 20 * 60)
+                )
+            )
+        )
+        val twentyOneMinutes = twentyMinutes.copy(
+            id = "twenty-one-minutes",
+            steps = listOf(
+                twentyMinutes.steps.first().copy(
+                    inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 21 * 60)
+                )
+            )
+        )
+
+        assertEquals(
+            listOf("twenty-minutes"),
+            listOf(twentyMinutes, twentyOneMinutes)
+                .upToDurationSeconds(20 * 60)
+                .map(Recipe::id)
+        )
+    }
+
+    @Test
+    fun sausageFourthStepHidesCompletionCriteriaForRealAndPresentationFlows() {
+        assertFalse(
+            shouldShowFigmaCompletionCriteria(
+                recipeId = PresentationSimulation.RECIPE_ID,
+                stepOrder = 4,
+                hasComparisonMedia = true
+            )
+        )
+        assertTrue(
+            shouldShowFigmaCompletionCriteria(
+                recipeId = PresentationSimulation.RECIPE_ID,
+                stepOrder = 3,
+                hasComparisonMedia = true
+            )
+        )
+    }
+
+    @Test
     fun persistedRecipesAreMigratedToThirtySecondAutomaticInspection() {
         val migrated = RecipeFixtures.sampleRecipes().map { recipe ->
             recipe.copy(steps = recipe.steps.map { step ->
@@ -267,6 +313,38 @@ class CookingDomainTest {
 
         assertTrue(hasReusableStartImage(stepFour, session))
         assertFalse(hasReusableStartImage(stepFour, session.copy(baselineUriByStep = emptyMap())))
+    }
+
+    @Test
+    fun manualAdvanceWithoutDonePhotoCapturesBaselineAfterFiveSecondsThenStartsInspection() {
+        val stepFour = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+            .first { it.order == 4 }
+
+        val plan = baselineCapturePlan(
+            step = stepFour,
+            manuallyAdvancedIntoStep = true
+        )
+
+        assertEquals(5, plan.delaySeconds)
+        assertFalse(plan.inspectionRunsWhileWaitingForBaseline)
+    }
+
+    @Test
+    fun baselineOnStepStartWithoutManualAdvanceRemainsImmediate() {
+        val stepFour = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps
+            .first { it.order == 4 }
+
+        val plan = baselineCapturePlan(
+            step = stepFour,
+            manuallyAdvancedIntoStep = false
+        )
+
+        assertEquals(0, plan.delaySeconds)
+        assertFalse(plan.inspectionRunsWhileWaitingForBaseline)
     }
 
     @Test

@@ -10,6 +10,7 @@
 | [`../요리어시스턴트_기능명세서.md`](../요리어시스턴트_기능명세서.md) | 기능 ID(`F4-3` 등) · 역할 분담 |
 | [`../docs/contract-compliance.md`](../docs/contract-compliance.md) | 미해결 위반 항목 — **작업 전 확인** |
 | [`notes/nemotron.md`](notes/nemotron.md) | 모델 선정 근거 · 지연 실측 |
+| [`notes/backup-backend.md`](notes/backup-backend.md) | **NVIDIA 장애 실측 · 백업 선정 · 체인 설계** |
 | [`notes/recipe-extraction-mvp.md`](notes/recipe-extraction-mvp.md) | YouTube 실영상 결과 · 회귀 기준선 · 다음 개선 우선순위 |
 | [`3번_AI서버_실행계획.md`](3번_AI서버_실행계획.md) | T0~T3 태스크 정의 |
 | `3번_진행상황_해설서.md` · `3번_파트_해설서.md` | 코드 단위 해설 (공부용) |
@@ -76,7 +77,9 @@
 
 설계 원칙 셋 — 어기면 나중에 원인 분리가 안 된다.
 
-- **벤더 종속 코드는 `judge/` 안에만.** 전환은 환경변수 한 줄: `VLM_BACKEND=nemotron|openai|mock`
+- **벤더 종속 코드는 `judge/` 안에만.** 전환은 환경변수 한 줄:
+  `VLM_BACKEND=nemotron|groq|gemini|openai|chain|mock`. `chain`은 주 백엔드가
+  죽거나 느릴 때 백업으로 넘긴다 — 근거는 [`notes/backup-backend.md`](notes/backup-backend.md)
 - **프롬프트 문자열은 `prompts.py`에만.** 어댑터는 포장만 한다. 고칠 때 `PROMPT_VERSION`도 같이 올린다 — 안 올리면 CSV에서 어느 프롬프트의 점수인지 사라진다
 - **계약은 루트 `CONTRACT.md` 1벌.** 서버 문서에 요청·응답 스펙을 복사하지 않는다
 
@@ -92,7 +95,8 @@ server/
 │   ├── base.py            Verdict · Protocol · 관대한 JSON 파서
 │   ├── nemotron.py        1순위 어댑터
 │   ├── mock.py            API 없는 가짜 어댑터 — 하네스 검증용
-│   └── openai_backend.py  2순위 (T2-5 조건부·미구현)
+│   ├── openai_backend.py  OpenAI 호환 범용 어댑터 (Groq·Gemini·OpenAI·OpenRouter)
+│   └── chain.py           폴백 + 헤지 — NVIDIA 장애를 백업으로 넘김
 ├── eval.py                정확도 평가 · --selftest · --mode both
 ├── smoke.py               판정 경로 확인 · 지연 분리
 ├── probe.py               다중 이미지 지원 확인
@@ -158,7 +162,15 @@ Render 무료 티어. **`main`에 push하면 자동 재배포**됩니다(5~10분
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` |
 | `NVIDIA_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` |
 | `TEAM_TOKEN` | 로컬 `.env`와 **동일하게** — 다르면 앱이 403 |
-| `VLM_BACKEND` | `nemotron` |
+| `VLM_BACKEND` | `chain` (백업 포함) · 단일 벤더면 `nemotron` |
+| `JUDGE_CHAIN` | `gemini,groq,nemotron` — 맨 앞이 주, 나머지가 백업 |
+| `JUDGE_HEDGE_AFTER_S` | `3.0` — 주 백엔드가 이 안에 답 못 하면 백업 동시 발사. 낮추면 백업 무료 한도가 빨리 소진됨 |
+| `GEMINI_API_KEY` | aistudio.google.com 무료 발급 — **주 백엔드** |
+| `GEMINI_MODEL` | `gemini-flash-lite-latest` — flash(비-lite)는 추론 모델이라 CANNOT_TELL 로 잘림 |
+| `GROQ_API_KEY` | `gsk_...` — console.groq.com 무료 발급 (1차 백업) |
+| `GROQ_MODEL` | `qwen/qwen3.6-27b` — 무료 티어에서 이미지를 받는 유일한 모델 |
+| `GROQ_REASONING_EFFORT` | `none` — 안 넣으면 `<think>` 가 max_tokens 를 다 써서 판정을 못 냄 |
+| `ROI_OUTPUT_LONG_EDGE` | `768` — 앱 `OnDeviceRoiCropper` 와 **같은 값**이어야 함 |
 | `DEBUG_MODE` | `X-Mock-*` 헤더 스위치. **시연 전 `false`** (T3-1) · 지우면 안전한 쪽으로 떨어짐 |
 | `YOUTUBE_TRANSCRIPT_API_KEY` | 선택. Render 등에서 YouTube 직접 자막 요청이 막힐 때 호스팅 자막 API 키 |
 | `YOUTUBE_PROXY_URL` | 선택. 직접 자막 수집에 쓸 HTTP(S) 프록시. 위 API 키와 둘 중 하나만 있으면 됨 |
@@ -171,7 +183,8 @@ Render 무료 티어. **`main`에 push하면 자동 재배포**됩니다(5~10분
 | 첫 요청만 30초+ | 15분 슬립에서 깨는 중. 정상 — 시연 전 워밍업(T3-5) |
 | `/health`는 되는데 판정이 403 | `TEAM_TOKEN` 불일치 |
 | 판정이 500 | `NVIDIA_API_KEY` / `NVIDIA_MODEL` 누락 |
-| 판정이 503 | 모델 7.5초 초과. **`CANNOT_TELL`과 절대 섞지 않는다**(CONTRACT §5) |
+| 판정이 503 | 모델 7.5초 초과 **또는** 업스트림 500(`EngineCore encountered an issue`).
+  둘은 원인이 다르다 — `detail` 문구로 구분한다. **`CANNOT_TELL`과 절대 섞지 않는다**(CONTRACT §5) |
 | 레시피 추출이 503이고 자막 차단 문구 | 클라우드 IP 차단. `YOUTUBE_TRANSCRIPT_API_KEY` 또는 `YOUTUBE_PROXY_URL` 설정 |
 
 ---

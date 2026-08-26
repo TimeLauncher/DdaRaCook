@@ -46,7 +46,15 @@ MODEL_PATH = Path(
 )
 ROI_CROP_ENABLED = os.getenv("ROI_CROP_ENABLED", "true").lower() == "true"
 MODEL_INPUT_SIZE = 640
-ROI_OUTPUT_LONG_EDGE = 768
+# VLM 입력 해상도.
+# 2026-08-26 에 지연을 줄이려 512 로 낮췄다가 768 로 되돌렸다. 이유 두 가지:
+#   ① 주 백엔드가 Gemini(flash-lite)로 바뀌면서 512 의 근거가 사라졌다.
+#      512 는 NVIDIA 지연(3,236→2,266ms) 대책이었는데, Gemini 는 p50 1,737ms 로
+#      이미 목표 안에 들고 Groq 는 해상도와 무관하게 토큰이 고정이다.
+#   ② 정확도 측정이 전부 768 기준이다(Gemini 19/21). 512 는 NVIDIA 7쌍에서
+#      768 보다 나빴다(4/7 vs 5/7, 512 에서만 false accept 1건).
+# 앱의 OnDeviceRoiCropper.ROI_OUTPUT_LONG_EDGE 와 반드시 같은 값이어야 한다.
+ROI_OUTPUT_LONG_EDGE = int(os.getenv("ROI_OUTPUT_LONG_EDGE", "768"))
 MINIMUM_CONFIDENCE = 0.05
 MAXIMUM_GAZE_DISTANCE = 0.30
 CONTEXT_PADDING = 0.0

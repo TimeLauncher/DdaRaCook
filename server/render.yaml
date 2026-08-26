@@ -7,8 +7,30 @@ services:
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # 백업 포함 체인. NVIDIA 가 죽거나 느리면 Groq 로 넘긴다.
+      # 근거와 실측은 notes/backup-backend.md 참고.
       - key: VLM_BACKEND
-        value: nemotron
+        value: chain
+      - key: JUDGE_CHAIN
+        value: gemini,groq,nemotron
+      # 낮추면 정상 응답에도 헤지가 나가 백업 무료 한도를 낭비한다.
+      # Gemini 주력 기준 정상 p50 1.7초 / 최대 2.4초 → 3.0초.
+      - key: JUDGE_HEDGE_AFTER_S
+        value: "3.0"
+      - key: GEMINI_MODEL
+        value: gemini-flash-lite-latest
+      - key: GEMINI_API_KEY
+        sync: false      # 대시보드에서 직접 입력
+      - key: GROQ_MODEL
+        value: qwen/qwen3.6-27b
+      # 추론 모델이라 없으면 <think> 가 max_tokens 를 다 써서 판정을 못 낸다.
+      - key: GROQ_REASONING_EFFORT
+        value: none
+      - key: GROQ_API_KEY
+        sync: false      # 대시보드에서 직접 입력
+      # 앱 OnDeviceRoiCropper.ROI_OUTPUT_LONG_EDGE 와 반드시 같은 값.
+      - key: ROI_OUTPUT_LONG_EDGE
+        value: "768"
       # 시연·운영에서는 끈다. 켜면 X-Mock-Verdict / X-Mock-Status 헤더로 판정 결과와
       # 오류를 임의로 주입할 수 있다(server.py:394, 404). 앱은 평상시 이 헤더를 보내지
       # 않으므로 꺼도 동작에 영향이 없고, 오류 경로를 손으로 시험할 때만 잠시 켠다.
