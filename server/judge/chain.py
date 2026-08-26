@@ -147,6 +147,19 @@ class ChainJudge:
             launched.add(member.name)
             pending[self._pool.submit(run, member)] = member
 
+        def launch_next_backup() -> bool:
+            """아직 안 띄운 백업을 **하나만** 띄운다.
+
+            전부 한꺼번에 띄우지 않는 이유: Render 무료 티어는 0.1 CPU 라
+            271KB base64 를 실은 동시 호출이 늘면 서로 CPU 를 뺏어 주 백엔드까지
+            느려진다. 헤지는 보험이지 부하 유발이면 안 된다.
+            """
+            for backup in self.backups:
+                if backup.name not in launched:
+                    launch(backup)
+                    return True
+            return False
+
         launch(self.primary)
         hedged = False
 
@@ -178,8 +191,8 @@ class ChainJudge:
                             hedged = True
                             with self._lock:
                                 self._hedge_count += 1
-                        for backup in self.backups:
-                            launch(backup)
+                        # 실패한 만큼만 다음 백업을 채운다.
+                        launch_next_backup()
                         continue
                     except Exception as e:  # noqa: BLE001
                         errors[member.name] = e
@@ -194,15 +207,28 @@ class ChainJudge:
                     hedged = True
                     with self._lock:
                         self._hedge_count += 1
-                    for backup in self.backups:
-                        launch(backup)
+                    launch_next_backup()
         finally:
             # 남은 호출은 버린다. 취소되지 않은 것은 백그라운드에서 끝나고
             # 결과는 버려지지만, 스레드가 새지 않도록 풀이 회수한다.
             for future in pending:
                 future.cancel()
 
-        # 전부 실패했다. 가장 설명력 있는 오류를 고른다.
+        # 예산이 끝났는데 아직 응답을 기다리던 백엔드가 있었다.
+        # 이건 "전부 실패"가 아니라 **타임아웃**이다. 여기서 백업의 오류(예: Groq
+        # 429)를 그대로 올리면 앱은 "레이트 리밋이니 백오프"로 읽는데, 실제로는
+        # 주 백엔드가 시간 안에 못 끝낸 것이다. CONTRACT §5 의 오류 구분이 깨진다.
+        # (실측 2026-08-26: gemini fail=0 인데 groq 429 가 앱에 나갔다)
+        if pending:
+            waiting = ", ".join(m.name for m in pending.values())
+            note = ("; ".join(f"{k}: {str(v)[:100]}" for k, v in errors.items())
+                    if errors else "")
+            raise JudgeTimeout(
+                f"{self.budget_s:.1f}초 예산 안에 응답이 오지 않았습니다 "
+                f"(대기 중: {waiting}"
+                + (f" · 실패: {note}" if note else "") + ")")
+
+        # 여기까지 왔다 = 띄운 백엔드가 전부 오류로 끝났다.
         if errors:
             primary_error = errors.get(self.primary.name)
             chosen = primary_error or next(iter(errors.values()))

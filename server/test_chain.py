@@ -9,7 +9,21 @@ import sys
 import threading
 import time
 
-from judge.base import JudgeTimeout, JudgeUpstreamError, Verdict
+# Windows 콘솔은 기본이 cp949 라 실패 메시지의 유니코드에서 죽는다.
+# 테스트가 실패했을 때 원인 대신 UnicodeEncodeError 를 보게 되면 최악이다.
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+from judge.base import (
+    JudgeRateLimit,
+    JudgeTimeout,
+    JudgeUpstreamError,
+    Verdict,
+)
 from judge.chain import ChainJudge
 
 
@@ -128,6 +142,71 @@ def test_stats_track_wins_and_failures() -> None:
     assert described["backups"] == ["backup"]
 
 
+
+def test_slow_primary_with_failing_backup_reports_timeout_not_backup_error() -> None:
+    """실측 회귀 — 주 백엔드가 아직 응답 중인데 백업이 429 를 내면?
+
+    예산이 끝났을 때 백업의 429 를 그대로 올리면 앱은 "레이트 리밋이니 백오프"로
+    읽는다. 실제로는 주 백엔드가 시간 안에 못 끝낸 것이므로 타임아웃(503)이어야
+    한다. CONTRACT §5 의 오류 구분이 여기서 깨진다.
+    (2026-08-26 배포본에서 gemini fail=0 인데 groq 429 가 앱에 나갔다)
+    """
+    primary = FakeJudge("primary", delay=5.0)          # 예산을 넘겨 계속 대기
+    backup = FakeJudge("backup", delay=0.02,
+                       error=JudgeRateLimit("Rate limit reached"))
+    chain = ChainJudge([primary, backup], hedge_after_s=0.2, budget_s=1.0)
+
+    try:
+        run(chain)
+    except JudgeTimeout as e:
+        assert "primary" in str(e), f"대기 중이던 주 백엔드를 알려야 합니다: {e}"
+    except JudgeRateLimit as e:
+        raise AssertionError(
+            f"백업의 429 가 앱에 그대로 나갔습니다 — 타임아웃이어야 합니다: {e}")
+    else:
+        raise AssertionError("예산 초과는 예외여야 합니다")
+
+    described = chain.describe()
+    assert described["stats"]["primary"]["fail"] == 0, "주 백엔드는 실패한 적이 없다"
+
+
+def test_hedge_launches_one_backup_at_a_time() -> None:
+    """헤지가 백업을 한꺼번에 다 띄우면 안 된다.
+
+    Render 무료 티어는 0.1 CPU 다. 271KB base64 를 실은 동시 호출이 늘면
+    서로 CPU 를 뺏어 주 백엔드까지 느려진다.
+    """
+    primary = FakeJudge("primary", delay=5.0)
+    backup1 = FakeJudge("backup1", delay=5.0)
+    backup2 = FakeJudge("backup2", delay=5.0)
+    chain = ChainJudge([primary, backup1, backup2],
+                       hedge_after_s=0.2, budget_s=0.6)
+
+    try:
+        run(chain)
+    except JudgeTimeout:
+        pass
+
+    assert backup1.calls == 1, f"첫 백업은 떠야 합니다 ({backup1.calls})"
+    assert backup2.calls == 0, (
+        f"두 번째 백업까지 한꺼번에 뜨면 안 됩니다 ({backup2.calls})")
+
+
+def test_failing_backup_escalates_to_next_backup() -> None:
+    """백업이 실패하면 그 다음 백업으로 넘어가야 한다."""
+    primary = FakeJudge("primary", delay=0.02, error=JudgeUpstreamError("500"))
+    backup1 = FakeJudge("backup1", delay=0.02, error=JudgeRateLimit("429"))
+    backup2 = FakeJudge("backup2", delay=0.02, verdict="NOT_DONE")
+    chain = ChainJudge([primary, backup1, backup2],
+                       hedge_after_s=1.0, budget_s=3.0)
+
+    v = run(chain)
+
+    assert v.verdict == "NOT_DONE", v.verdict
+    assert v.backend == "backup2", v.backend
+    assert backup1.calls == 1 and backup2.calls == 1
+
+
 def main() -> int:
     cases = [
         ("정상일 때 백업을 부르지 않음", test_fast_primary_never_calls_backup),
@@ -136,6 +215,10 @@ def main() -> int:
         ("전부 실패 → 예외 (CANNOT_TELL 금지)", test_all_backends_fail_raises),
         ("예산 초과 → JudgeTimeout", test_budget_exhausted_raises_timeout),
         ("통계 집계", test_stats_track_wins_and_failures),
+        ("느린 주 + 429 백업 → 타임아웃(백업 오류 아님)",
+         test_slow_primary_with_failing_backup_reports_timeout_not_backup_error),
+        ("헤지는 백업을 하나씩만 띄움", test_hedge_launches_one_backup_at_a_time),
+        ("백업 실패 시 다음 백업으로 승계", test_failing_backup_escalates_to_next_backup),
     ]
     failed = 0
     for name, test in cases:
