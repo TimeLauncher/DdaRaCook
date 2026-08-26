@@ -40,9 +40,9 @@ def test_manual_mode_is_byte_for_byte_passthrough():
     assert decision.mode == "NO_CROP"
 
 
-def test_legacy_target_keeps_bottom_60_and_long_edge_1024():
+def test_legacy_target_keeps_bottom_60_and_long_edge_768():
     result, decision = prepare_judge_image(jpeg_b64(), "LEGACY_BOTTOM_60")
-    assert dimensions(result) == (1024, 819)
+    assert dimensions(result) == (768, 614)
     assert decision.mode == "LEGACY_BOTTOM_60"
 
 
@@ -53,7 +53,7 @@ def test_board_detection_produces_standard_4_by_3_crop():
     result, decision = prepare_judge_image(
         jpeg_b64(), "CUTTING_BOARD_ROI", detector=detector
     )
-    assert dimensions(result) == (1024, 768)
+    assert dimensions(result) == (768, 576)
     assert decision.mode == "YOLO_ROI"
 
 
@@ -64,8 +64,21 @@ def test_pan_detection_produces_square_crop():
     result, decision = prepare_judge_image(
         jpeg_b64(), "PAN_COOKING_ROI", detector=detector
     )
-    assert dimensions(result) == (1024, 1024)
+    assert dimensions(result) == (768, 768)
     assert decision.mode == "YOLO_ROI"
+
+
+def test_auto_roi_uses_selected_detection_class_for_output_ratio():
+    detector = FakeDetector([
+        Detection("CUTTING_BOARD_ROI", 0.9, (0.05, 0.20, 0.20, 0.20)),
+        Detection("PAN_COOKING_ROI", 0.7, (0.38, 0.54, 0.41, 0.31)),
+    ])
+    result, decision = prepare_judge_image(
+        jpeg_b64(), "AUTO_ROI", detector=detector
+    )
+    assert dimensions(result) == (768, 768)
+    assert decision.mode == "YOLO_ROI"
+    assert decision.target == "AUTO_ROI"
 
 
 def test_far_detection_uses_safe_fallback():
@@ -75,7 +88,7 @@ def test_far_detection_uses_safe_fallback():
     result, decision = prepare_judge_image(
         jpeg_b64(), "PAN_COOKING_ROI", detector=detector
     )
-    assert dimensions(result) == (1024, 819)
+    assert dimensions(result) == (768, 614)
     assert decision.mode == "FALLBACK_BOTTOM_60"
 
 
@@ -87,7 +100,7 @@ def test_detector_exception_uses_safe_fallback():
     result, decision = prepare_judge_image(
         jpeg_b64(), "PAN_COOKING_ROI", detector=BrokenDetector()
     )
-    assert dimensions(result) == (1024, 819)
+    assert dimensions(result) == (768, 614)
     assert decision.mode == "FALLBACK_BOTTOM_60"
 
 
@@ -105,9 +118,10 @@ def main() -> int:
     tests = [
         test_old_client_is_byte_for_byte_passthrough,
         test_manual_mode_is_byte_for_byte_passthrough,
-        test_legacy_target_keeps_bottom_60_and_long_edge_1024,
+        test_legacy_target_keeps_bottom_60_and_long_edge_768,
         test_board_detection_produces_standard_4_by_3_crop,
         test_pan_detection_produces_square_crop,
+        test_auto_roi_uses_selected_detection_class_for_output_ratio,
         test_far_detection_uses_safe_fallback,
         test_detector_exception_uses_safe_fallback,
         test_agnostic_nms_merges_overlapping_synonym_boxes,

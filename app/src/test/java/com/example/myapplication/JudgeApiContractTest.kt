@@ -23,6 +23,10 @@ class JudgeApiContractTest {
     @Test
     fun automaticCropTargetUsesRecipeValueAndManualDisablesCrop() {
         assertEquals(
+            "AUTO_ROI",
+            ImageCropTarget.AUTO_ROI.toServerValue(JudgmentImagePolicy.AUTOMATIC_CAMERA)
+        )
+        assertEquals(
             "CUTTING_BOARD_ROI",
             ImageCropTarget.CUTTING_BOARD_ROI.toServerValue(JudgmentImagePolicy.AUTOMATIC_CAMERA)
         )

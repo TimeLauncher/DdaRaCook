@@ -1,0 +1,312 @@
+{
+    "id":  "recipe-c4c91214-0ae9-4771-9dcb-d87f991f5e4b",
+    "title":  "소시지야채볶음",
+    "heroNote":  "YouTube 자막에서 추출 · 저장 전 확인",
+    "isMvpReady":  false,
+    "ingredients":  [
+                        {
+                            "name":  "소시지",
+                            "amount":  "200g"
+                        },
+                        {
+                            "name":  "파프리카(노란색)",
+                            "amount":  "1/2개"
+                        },
+                        {
+                            "name":  "파프리카(빨간색)",
+                            "amount":  "1/2개"
+                        },
+                        {
+                            "name":  "파프리카(초록색)",
+                            "amount":  "1/2개"
+                        },
+                        {
+                            "name":  "양파",
+                            "amount":  "1/2개"
+                        },
+                        {
+                            "name":  "브로콜리",
+                            "amount":  "분량 미상"
+                        },
+                        {
+                            "name":  "소금",
+                            "amount":  "1/2작은술"
+                        },
+                        {
+                            "name":  "고추장",
+                            "amount":  "1/2큰술"
+                        },
+                        {
+                            "name":  "케첩",
+                            "amount":  "3큰술"
+                        },
+                        {
+                            "name":  "설탕",
+                            "amount":  "1큰술"
+                        },
+                        {
+                            "name":  "물엿",
+                            "amount":  "1큰술"
+                        },
+                        {
+                            "name":  "돈까스소스",
+                            "amount":  "2큰술"
+                        },
+                        {
+                            "name":  "마늘",
+                            "amount":  "10쪽"
+                        },
+                        {
+                            "name":  "식용유",
+                            "amount":  "2큰술"
+                        },
+                        {
+                            "name":  "후추",
+                            "amount":  "약간"
+                        }
+                    ],
+    "steps":  [
+                  {
+                      "order":  1,
+                      "instruction":  "소시지에 칼집을 낸다",
+                      "checkType":  "STATE_TRANSITION",
+                      "checkCondition":  "도마 위에 칼집이 나지 않은 통짜 소시지가 없는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "소시지"
+                                            ],
+                      "voicePrompt":  "1단계. 소시지에 칼집을 내세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  120
+                                           }
+                  },
+                  {
+                      "order":  2,
+                      "instruction":  "소시지를 한입 크기로 자른다",
+                      "checkType":  "STATE_TRANSITION",
+                      "checkCondition":  "도마 위에 통째로 남은 소시지가 없는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "소시지"
+                                            ],
+                      "voicePrompt":  "2단계. 소시지를 한입 크기로 자르세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  120
+                                           }
+                  },
+                  {
+                      "order":  3,
+                      "instruction":  "파프리카(노란색, 빨간색, 초록색)를 소시지 크기로 잘라 썬다",
+                      "checkType":  "STATE_TRANSITION",
+                      "checkCondition":  "도마 위에 통째로 남은 파프리카가 없는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "파프리카(노란색)",
+                                                "파프리카(빨간색)",
+                                                "파프리카(초록색)"
+                                            ],
+                      "voicePrompt":  "3단계. 파프리카 세 색을 소시지 크기로 잘라 썰어 주세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  180
+                                           }
+                  },
+                  {
+                      "order":  4,
+                      "instruction":  "양파를 파프리카 크기로 잘라 썬다",
+                      "checkType":  "STATE_TRANSITION",
+                      "checkCondition":  "도마 위에 통째로 남은 양파가 없는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "양파"
+                                            ],
+                      "voicePrompt":  "4단계. 양파를 파프리카 크기로 잘라 썰어 주세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  120
+                                           }
+                  },
+                  {
+                      "order":  5,
+                      "instruction":  "끓는 물에 소금 1/2작은술을 넣고 브로콜리를 30초간 데친 뒤 찬물에 담근다",
+                      "checkType":  "TIMER_ONLY",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "브로콜리",
+                                                "소금"
+                                            ],
+                      "voicePrompt":  "5단계. 끓는 물에 소금을 넣고 브로콜리를 30초간 데친 뒤 찬물에 담가 주세요.",
+                      "isAutoCheck":  false,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false
+                  },
+                  {
+                      "order":  6,
+                      "instruction":  "고추장, 케첩, 설탕, 물엿, 돈까스소스를 섞어 양념장을 만든다",
+                      "checkType":  "PRESENCE",
+                      "checkCondition":  "그릇에 섞인 양념장이 들어있는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "고추장",
+                                                "케첩",
+                                                "설탕",
+                                                "물엿",
+                                                "돈까스소스"
+                                            ],
+                      "voicePrompt":  "6단계. 고추장, 케첩, 설탕, 물엿, 돈까스소스를 섞어 양념장을 만드세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  120
+                                           }
+                  },
+                  {
+                      "order":  7,
+                      "instruction":  "웍에 식용유를 두르고 소시지와 마늘을 넣어 중불로 노릇하게 볶는다",
+                      "checkType":  "COLOR_CHANGE",
+                      "checkCondition":  "시작 시점 사진과 비교해 소시지가 노릇한 갈색으로 익었는가",
+                      "needsStartImage":  true,
+                      "targetIngredients":  [
+                                                "소시지",
+                                                "마늘",
+                                                "식용유"
+                                            ],
+                      "voicePrompt":  "7단계. 웍에 식용유를 두르고 소시지와 마늘을 넣어 중불로 노릇하게 볶으세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  true,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  3,
+                                               "requiredConsecutiveDone":  2,
+                                               "maxExpectedSeconds":  240
+                                           }
+                  },
+                  {
+                      "order":  8,
+                      "instruction":  "파프리카와 양파를 넣고 1분간 볶는다",
+                      "checkType":  "PRESENCE",
+                      "checkCondition":  "웍 안에 파프리카와 양파가 들어가 있는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "파프리카(노란색)",
+                                                "파프리카(빨간색)",
+                                                "파프리카(초록색)",
+                                                "양파"
+                                            ],
+                      "voicePrompt":  "8단계. 파프리카와 양파를 넣고 1분간 볶아 주세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  90
+                                           }
+                  },
+                  {
+                      "order":  9,
+                      "instruction":  "양념장을 넣고 센 불에서 볶는다",
+                      "checkType":  "PRESENCE",
+                      "checkCondition":  "웍 안에 양념장이 들어가 있는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "고추장",
+                                                "케첩",
+                                                "설탕",
+                                                "물엿",
+                                                "돈까스소스"
+                                            ],
+                      "voicePrompt":  "9단계. 양념장을 넣고 센 불에서 볶아 주세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  120
+                                           }
+                  },
+                  {
+                      "order":  10,
+                      "instruction":  "후추를 약간 넣고 섞어 불을 끈다",
+                      "checkType":  "TIMER_ONLY",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "후추"
+                                            ],
+                      "voicePrompt":  "10단계. 후추를 약간 넣고 섞은 뒤 불을 꺼 주세요.",
+                      "isAutoCheck":  false,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false
+                  },
+                  {
+                      "order":  11,
+                      "instruction":  "물기를 뺀 브로콜리를 넣고 섞는다",
+                      "checkType":  "PRESENCE",
+                      "checkCondition":  "웍 안에 브로콜리가 들어가 있는가",
+                      "needsStartImage":  false,
+                      "targetIngredients":  [
+                                                "브로콜리"
+                                            ],
+                      "voicePrompt":  "11단계. 물기를 뺀 브로콜리를 넣고 섞어 주세요.",
+                      "isAutoCheck":  true,
+                      "imageCropTarget":  "LEGACY_BOTTOM_60",
+                      "waitsForParallelTimer":  false,
+                      "baselineOnStepStart":  false,
+                      "inspectionPolicy":  {
+                                               "earliestCheckSeconds":  30,
+                                               "checkIntervalSeconds":  30,
+                                               "burstSeconds":  2,
+                                               "requiredConsecutiveDone":  1,
+                                               "maxExpectedSeconds":  90
+                                           }
+                  }
+              ]
+}

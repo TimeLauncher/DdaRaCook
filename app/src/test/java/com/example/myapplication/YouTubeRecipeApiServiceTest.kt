@@ -1,6 +1,7 @@
 package com.example.myapplication
 
 import com.example.myapplication.recipeimport.serverCheckTypeToApp
+import com.example.myapplication.recipeimport.importedStepCropTarget
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -18,5 +19,11 @@ class YouTubeRecipeApiServiceTest {
         mappings.forEach { (serverType, appType) ->
             assertEquals(appType, serverCheckTypeToApp(serverType))
         }
+    }
+
+    @Test
+    fun extractedStepsChooseCropPolicyWithoutServerCropMetadata() {
+        assertEquals(ImageCropTarget.AUTO_ROI, importedStepCropTarget(isAutoCheck = true))
+        assertEquals(ImageCropTarget.LEGACY_BOTTOM_60, importedStepCropTarget(isAutoCheck = false))
     }
 }

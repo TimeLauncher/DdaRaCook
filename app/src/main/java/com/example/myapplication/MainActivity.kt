@@ -609,7 +609,11 @@ private fun RecipeEditorScreen(
             voicePrompt = instruction.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY,
             imageCropTarget = editingIndex?.let { steps.getOrNull(it)?.imageCropTarget }
-                ?: ImageCropTarget.LEGACY_BOTTOM_60,
+                ?: if (checkType == CheckType.TIMER_ONLY) {
+                    ImageCropTarget.LEGACY_BOTTOM_60
+                } else {
+                    ImageCropTarget.AUTO_ROI
+                },
             // 편집기에는 병렬 타이머 입력이 없다. 편집 중인 단계에 걸려 있던 설정을 지우지 않는다.
             parallelTimer = editingIndex?.let { steps.getOrNull(it)?.parallelTimer },
             waitsForParallelTimer = editingIndex?.let { steps.getOrNull(it)?.waitsForParallelTimer } ?: false,

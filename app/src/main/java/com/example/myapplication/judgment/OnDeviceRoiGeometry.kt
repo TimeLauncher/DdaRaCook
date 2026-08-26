@@ -91,7 +91,7 @@ internal fun selectLocalActiveDetection(
 ): LocalRoiDetection? = detections
     .asSequence()
     .filter { detection ->
-        detection.target == expectedTarget &&
+        (expectedTarget == ImageCropTarget.AUTO_ROI || detection.target == expectedTarget) &&
             detection.confidence >= minimumConfidence &&
             hypot(detection.centerX - anchorX, detection.centerY - anchorY) <= maximumGazeDistance
     }

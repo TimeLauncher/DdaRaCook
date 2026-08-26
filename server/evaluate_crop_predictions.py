@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from roi_crop import (
+    AUTO_ROI,
     DEFAULT_ASPECT_RATIOS,
     Detection,
     bottom_60_fallback,
@@ -36,6 +37,8 @@ class ClassMetrics:
     false_negatives: int = 0
     active_hits: int = 0
     active_overlaps: int = 0
+    correct_class_selections: int = 0
+    wrong_class_selections: int = 0
     fallbacks: int = 0
     roi_crops_covered: int = 0
     final_crops_covered: int = 0
@@ -56,6 +59,12 @@ class ClassMetrics:
             "activeTargetHitRate": self.active_hits / self.images if self.images else 0.0,
             "activeTargetOverlapRate": (
                 self.active_overlaps / self.images if self.images else 0.0
+            ),
+            "correctClassSelectionRate": (
+                self.correct_class_selections / self.images if self.images else 0.0
+            ),
+            "wrongClassSelectionRate": (
+                self.wrong_class_selections / self.images if self.images else 0.0
             ),
             "fallbackRate": self.fallbacks / self.images if self.images else 0.0,
             "roiCropCoverageRate": (
@@ -151,6 +160,7 @@ def evaluate(
     iou_threshold: float,
     maximum_gaze_distance: float | None = None,
     context_padding: float = 0.18,
+    auto_roi: bool = False,
 ) -> tuple[dict, list[str]]:
     manifest = load_json(DATA_ROOT / "crop-manifest.json")
     annotations = load_json(DATA_ROOT / "roi-annotations.json")
@@ -184,15 +194,19 @@ def evaluate(
         prediction_row = prediction_by_id.get(image_id, {"detections": []})
         if isinstance(prediction_row.get("latencyMs"), (int, float)):
             latencies.append(float(prediction_row["latencyMs"]))
-        detections = [
+        all_detections = [
             Detection(
                 class_name=row["class"],
                 confidence=float(row["confidence"]),
                 bbox=tuple(row["bbox"]),
             )
             for row in prediction_row.get("detections", [])
-            if row.get("class") == expected_class
-            and float(row.get("confidence", 0)) >= minimum_confidence
+            if float(row.get("confidence", 0)) >= minimum_confidence
+        ]
+        detections = [
+            detection
+            for detection in all_detections
+            if detection.class_name == expected_class
         ]
         class_metrics.predicted_boxes += len(detections)
         true_positives, false_positives, false_negatives = greedy_matches(
@@ -203,8 +217,8 @@ def evaluate(
         class_metrics.false_negatives += false_negatives
 
         selected = select_active_detection(
-            detections,
-            expected_class,
+            all_detections if auto_roi else detections,
+            AUTO_ROI if auto_roi else expected_class,
             gaze_anchor=gaze_anchor,
             minimum_confidence=minimum_confidence,
             maximum_gaze_distance=maximum_gaze_distance,
@@ -214,12 +228,23 @@ def evaluate(
             final_window = bottom_60_fallback(image_width, image_height)
             failures.append(f"{image_id}: no selected {expected_class}")
         else:
-            active_iou = intersection_over_union(selected.bbox, active_ground_truth)
-            if intersection_over_smaller(selected.bbox, active_ground_truth) >= 0.5:
-                class_metrics.active_overlaps += 1
-            if active_iou >= iou_threshold:
-                class_metrics.active_hits += 1
+            if selected.class_name != expected_class:
+                class_metrics.wrong_class_selections += 1
+                failures.append(
+                    f"{image_id}: selected wrong class "
+                    f"({selected.class_name}, expected {expected_class})"
+                )
             else:
+                class_metrics.correct_class_selections += 1
+            active_iou = intersection_over_union(selected.bbox, active_ground_truth)
+            if (
+                selected.class_name == expected_class
+                and intersection_over_smaller(selected.bbox, active_ground_truth) >= 0.5
+            ):
+                class_metrics.active_overlaps += 1
+            if selected.class_name == expected_class and active_iou >= iou_threshold:
+                class_metrics.active_hits += 1
+            elif selected.class_name == expected_class:
                 failures.append(
                     f"{image_id}: selected wrong target (active IoU={active_iou:.3f})"
                 )
@@ -227,7 +252,7 @@ def evaluate(
                 image_width,
                 image_height,
                 selected.bbox,
-                DEFAULT_ASPECT_RATIOS[expected_class],
+                DEFAULT_ASPECT_RATIOS[selected.class_name],
                 context_padding=context_padding,
             )
             if active_coverage_in_window(
@@ -249,6 +274,7 @@ def evaluate(
             setattr(total, field, getattr(total, field) + getattr(value, field))
     summary = {
         "model": predictions.get("model", "unknown"),
+        "selectionMode": AUTO_ROI if auto_roi else "RECIPE_TARGET",
         "minimumConfidence": minimum_confidence,
         "iouThreshold": iou_threshold,
         "maximumGazeDistance": maximum_gaze_distance,
@@ -277,6 +303,11 @@ def main() -> int:
     parser.add_argument("--iou", type=float, default=0.50)
     parser.add_argument("--max-gaze-distance", type=float)
     parser.add_argument("--context-padding", type=float, default=0.22)
+    parser.add_argument(
+        "--auto-roi",
+        action="store_true",
+        help="select the closest board or pan exactly like AUTO_ROI production mode",
+    )
     parser.add_argument("--padding-sweep", help="comma-separated context padding values")
     parser.add_argument(
         "--distance-sweep",
@@ -301,6 +332,7 @@ def main() -> int:
                 args.iou,
                 args.max_gaze_distance,
                 padding,
+                args.auto_roi,
             )
             overall = sweep_summary["overall"]
             print(
@@ -314,7 +346,12 @@ def main() -> int:
         for value in args.distance_sweep.split(","):
             distance = None if value.strip().lower() == "none" else float(value)
             sweep_summary, _ = evaluate(
-                predictions, args.confidence, args.iou, distance, args.context_padding
+                predictions,
+                args.confidence,
+                args.iou,
+                distance,
+                args.context_padding,
+                args.auto_roi,
             )
             overall = sweep_summary["overall"]
             label = "none" if distance is None else f"{distance:.2f}"
@@ -335,6 +372,7 @@ def main() -> int:
                 args.iou,
                 args.max_gaze_distance,
                 args.context_padding,
+                args.auto_roi,
             )
             overall = sweep_summary["overall"]
             print(
@@ -350,6 +388,7 @@ def main() -> int:
         args.iou,
         args.max_gaze_distance,
         args.context_padding,
+        args.auto_roi,
     )
     rendered = json.dumps(summary, ensure_ascii=False, indent=2)
     print(rendered)

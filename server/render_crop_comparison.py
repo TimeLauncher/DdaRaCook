@@ -14,6 +14,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from roi_crop import (
+    AUTO_ROI,
     DEFAULT_ASPECT_RATIOS,
     Detection,
     bottom_60_fallback,
@@ -42,7 +43,7 @@ def font(size: int):
     return ImageFont.load_default()
 
 
-def normalized_crop(source: Image.Image, bounds, long_edge: int = 1024) -> Image.Image:
+def normalized_crop(source: Image.Image, bounds, long_edge: int = 768) -> Image.Image:
     cropped = source.crop((bounds.left, bounds.top, bounds.right, bounds.bottom))
     output_size = scaled_dimensions(cropped.width, cropped.height, long_edge)
     if output_size != cropped.size:
@@ -98,6 +99,11 @@ def main() -> int:
     parser.add_argument("--confidence", type=float, default=0.05)
     parser.add_argument("--max-gaze-distance", type=float)
     parser.add_argument("--context-padding", type=float, default=0.22)
+    parser.add_argument(
+        "--auto-roi",
+        action="store_true",
+        help="select the closest board or pan exactly like AUTO_ROI production mode",
+    )
     parser.add_argument("--name", default="crop-comparison")
     args = parser.parse_args()
 
@@ -141,7 +147,7 @@ def main() -> int:
             ]
             selected = select_active_detection(
                 detections,
-                case["targetClass"],
+                AUTO_ROI if args.auto_roi else case["targetClass"],
                 gaze_anchor=tuple(manifest["selectionPolicy"]["gazeAnchorNormalized"]),
                 minimum_confidence=args.confidence,
                 maximum_gaze_distance=args.max_gaze_distance,
@@ -151,11 +157,12 @@ def main() -> int:
                 method_label = "FALLBACK bottom60"
                 method_color = (255, 180, 60)
             else:
+                selected_class = selected.class_name
                 candidate_bounds = crop_window_for_bbox(
                     source.width,
                     source.height,
                     selected.bbox,
-                    DEFAULT_ASPECT_RATIOS[case["targetClass"]],
+                    DEFAULT_ASPECT_RATIOS[selected_class],
                     context_padding=args.context_padding,
                 )
                 active_x, active_y, active_width, active_height = active["bbox"]
@@ -172,7 +179,12 @@ def main() -> int:
                     active_width * source.width * active_height * source.height
                 )
                 safe = coverage >= 0.95
-                method_label = f"YOLO {'SAFE' if safe else 'MISS'} {ratio_name}"
+                selected_ratio_name = (
+                    "4:3" if selected_class == "CUTTING_BOARD_ROI" else "1:1"
+                )
+                method_label = (
+                    f"YOLO {'SAFE' if safe else 'MISS'} {selected_ratio_name}"
+                )
                 method_color = (70, 255, 90) if safe else (255, 80, 80)
         else:
             candidate_bounds = crop_window_for_bbox(

@@ -124,7 +124,7 @@ internal class OnDeviceRoiCropper(context: Context) {
             output = if (selected == null) {
                 legacyBottomSixty(source)
             } else {
-                detectedRoi(source, selected, target)
+                detectedRoi(source, selected, selected.target)
             }
             val postprocessMs = elapsedMs(postprocessStarted)
 
@@ -297,8 +297,12 @@ internal class OnDeviceRoiCropper(context: Context) {
             window.width,
             window.height
         )
-        val outputWidth = 1024
-        val outputHeight = if (target == ImageCropTarget.CUTTING_BOARD_ROI) 768 else 1024
+        val outputWidth = ROI_OUTPUT_LONG_EDGE
+        val outputHeight = if (target == ImageCropTarget.CUTTING_BOARD_ROI) {
+            ROI_OUTPUT_LONG_EDGE * 3 / 4
+        } else {
+            ROI_OUTPUT_LONG_EDGE
+        }
         val normalized = Bitmap.createScaledBitmap(cropped, outputWidth, outputHeight, true)
         if (normalized !== cropped) cropped.recycle()
         return normalized
@@ -313,7 +317,7 @@ internal class OnDeviceRoiCropper(context: Context) {
             window.width,
             window.height
         )
-        val dimensions = scaledDimensions(cropped.width, cropped.height, 1024)
+        val dimensions = scaledDimensions(cropped.width, cropped.height, ROI_OUTPUT_LONG_EDGE)
         val normalized = if (dimensions.width == cropped.width && dimensions.height == cropped.height) {
             cropped
         } else {
@@ -393,6 +397,7 @@ internal class OnDeviceRoiCropper(context: Context) {
         const val TAG = "OnDeviceRoiCropper"
         const val MODEL_ASSET = "models/yoloe-26n-cook-roi.onnx"
         const val MODEL_INPUT_SIZE = 640
+        const val ROI_OUTPUT_LONG_EDGE = 768
         const val CHANNELS = 3
         const val JPEG_QUALITY = 80
 

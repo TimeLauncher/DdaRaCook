@@ -1023,6 +1023,7 @@ internal fun FigmaManualModeScreen(
 }
 
 private fun ImageCropTarget.debugLabel(): String = when (this) {
+    ImageCropTarget.AUTO_ROI -> "자동 도마·팬 ROI"
     ImageCropTarget.CUTTING_BOARD_ROI -> "도마 ROI"
     ImageCropTarget.PAN_COOKING_ROI -> "팬 ROI"
     ImageCropTarget.LEGACY_BOTTOM_60 -> "기존 아래 60%"
@@ -1465,7 +1466,11 @@ internal fun FigmaRecipeEditorScreen(
             targetIngredients = old?.targetIngredients.orEmpty(),
             voicePrompt = instruction.trim(),
             isAutoCheck = checkType != CheckType.TIMER_ONLY,
-            imageCropTarget = old?.imageCropTarget ?: ImageCropTarget.LEGACY_BOTTOM_60,
+            imageCropTarget = old?.imageCropTarget ?: if (checkType == CheckType.TIMER_ONLY) {
+                ImageCropTarget.LEGACY_BOTTOM_60
+            } else {
+                ImageCropTarget.AUTO_ROI
+            },
             parallelTimer = old?.parallelTimer,
             waitsForParallelTimer = old?.waitsForParallelTimer ?: false,
             baselineOnStepStart = old?.baselineOnStepStart ?: false

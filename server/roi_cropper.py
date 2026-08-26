@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image
 
 from roi_crop import (
+    AUTO_ROI,
     CUTTING_BOARD_ROI,
     PAN_COOKING_ROI,
     Detection,
@@ -31,6 +32,7 @@ from roi_crop import (
 
 
 CropTarget = Literal[
+    "AUTO_ROI",
     "CUTTING_BOARD_ROI",
     "PAN_COOKING_ROI",
     "LEGACY_BOTTOM_60",
@@ -44,6 +46,7 @@ MODEL_PATH = Path(
 )
 ROI_CROP_ENABLED = os.getenv("ROI_CROP_ENABLED", "true").lower() == "true"
 MODEL_INPUT_SIZE = 640
+ROI_OUTPUT_LONG_EDGE = 768
 MINIMUM_CONFIDENCE = 0.05
 MAXIMUM_GAZE_DISTANCE = 0.30
 CONTEXT_PADDING = 0.0
@@ -177,7 +180,9 @@ def _encode_jpeg(image: Image.Image) -> str:
 def _legacy_crop(image: Image.Image) -> Image.Image:
     bounds = bottom_60_fallback(image.width, image.height)
     cropped = image.crop((bounds.left, bounds.top, bounds.right, bounds.bottom))
-    output_size = scaled_dimensions(cropped.width, cropped.height, 1024)
+    output_size = scaled_dimensions(
+        cropped.width, cropped.height, ROI_OUTPUT_LONG_EDGE
+    )
     return (
         cropped.resize(output_size, Image.Resampling.LANCZOS)
         if output_size != cropped.size
@@ -213,7 +218,8 @@ def prepare_judge_image(
                 maximum_gaze_distance=MAXIMUM_GAZE_DISTANCE,
             )
             if selected is not None:
-                ratio = 4 / 3 if target == CUTTING_BOARD_ROI else 1.0
+                selected_target = selected.class_name
+                ratio = 4 / 3 if selected_target == CUTTING_BOARD_ROI else 1.0
                 bounds = crop_window_for_bbox(
                     image.width,
                     image.height,
@@ -224,7 +230,11 @@ def prepare_judge_image(
                 cropped = image.crop(
                     (bounds.left, bounds.top, bounds.right, bounds.bottom)
                 )
-                output_size = (1024, 768) if target == CUTTING_BOARD_ROI else (1024, 1024)
+                output_size = (
+                    (ROI_OUTPUT_LONG_EDGE, ROI_OUTPUT_LONG_EDGE * 3 // 4)
+                    if selected_target == CUTTING_BOARD_ROI
+                    else (ROI_OUTPUT_LONG_EDGE, ROI_OUTPUT_LONG_EDGE)
+                )
                 normalized = cropped.resize(output_size, Image.Resampling.LANCZOS)
                 return _encode_jpeg(normalized), CropDecision(
                     "YOLO_ROI", target, len(detections)
