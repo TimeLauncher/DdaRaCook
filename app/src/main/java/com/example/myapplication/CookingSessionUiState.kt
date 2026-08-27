@@ -73,6 +73,8 @@ data class CookingSessionUiState(
     val presentationSimulationSelected: Boolean = false,
     val presentationCaptureVisible: Boolean = false,
     val editorImportDraft: Recipe? = null,
+    /** 편집기 밖(레시피 목록)에서 넘어온 링크. 편집기의 입력칸을 이 값으로 채운다. */
+    val recipeImportUrl: String = "",
     val isRecipeImporting: Boolean = false,
     val recipeImportError: String? = null,
     val recipeImportWarnings: List<String> = emptyList()

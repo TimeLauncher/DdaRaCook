@@ -75,6 +75,7 @@ import com.example.myapplication.camera.CaptureArtifact
 import com.example.myapplication.camera.WearableCameraState
 import com.example.myapplication.judgment.ImageNormalizer
 import com.example.myapplication.judgment.JudgmentTimingBreakdown
+import com.example.myapplication.recipeimport.looksLikeYoutubeLink
 import com.example.myapplication.voice.WakeWordStatus
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -372,14 +373,13 @@ internal fun FigmaRecipeScreen(
     onToggleScrap: (String) -> Unit,
     onHome: () -> Unit,
     onAddRecipe: () -> Unit,
+    onExtractYoutube: (String) -> Unit,
     onMy: () -> Unit,
     onPresentationSimulation: () -> Unit,
     onResume: () -> Unit
 ) {
     var onlyTwentyMinutesOrLess by remember { mutableStateOf(false) }
     val presentationCard = PresentationSimulation.homeCard(uiState.recipes)
-    val youtubeDemoRecipe = uiState.recipes.firstOrNull { it.id == "kimchi" }
-        ?: uiState.recipes.firstOrNull()
     val allHomeRecipes = buildList {
         uiState.recipes.forEach { recipe ->
             add(recipe)
@@ -429,10 +429,7 @@ internal fun FigmaRecipeScreen(
             }
 
             Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp)) {
-                FigmaYoutubeRecipeDemoCard(
-                    recipe = youtubeDemoRecipe,
-                    onOpenRecipe = { youtubeDemoRecipe?.let { onRecipeClick(it.id) } }
-                )
+                FigmaYoutubeRecipeImportCard(onExtract = onExtractYoutube)
             }
 
             if (uiState.hasResumableSession && uiState.session != null && uiState.selectedRecipe != null) {
@@ -516,24 +513,18 @@ internal fun FigmaRecipeScreen(
     }
 }
 
-private enum class YoutubeRecipeDemoStage { INPUT, ANALYZING, RESULT }
-
+/**
+ * 레시피 목록에서 바로 유튜브 링크를 받는 입구.
+ *
+ * 여기서는 링크만 받고 실제 추출은 편집기가 한다(`onExtract` → `openRecipeEditorWithYoutubeImport`).
+ * 진행 상태·경고·오류·결과 초안이 모두 편집기 한 곳에 있어야 사용자가 저장 전에 고칠 수 있다.
+ */
 @Composable
-private fun FigmaYoutubeRecipeDemoCard(
-    recipe: Recipe?,
-    onOpenRecipe: () -> Unit
+private fun FigmaYoutubeRecipeImportCard(
+    onExtract: (String) -> Unit
 ) {
     var url by remember { mutableStateOf("") }
-    var stage by remember { mutableStateOf(YoutubeRecipeDemoStage.INPUT) }
-    val validUrl = url.startsWith("https://") &&
-        (url.contains("youtube.com", ignoreCase = true) || url.contains("youtu.be", ignoreCase = true))
-
-    LaunchedEffect(stage) {
-        if (stage == YoutubeRecipeDemoStage.ANALYZING) {
-            delay(1_800L)
-            stage = YoutubeRecipeDemoStage.RESULT
-        }
-    }
+    val validUrl = remember(url) { looksLikeYoutubeLink(url) }
 
     Column(
         Modifier
@@ -542,7 +533,7 @@ private fun FigmaYoutubeRecipeDemoCard(
             .background(Color(0xFFFFF6EE))
             .border(1.dp, Color(0xFFFFD8B8), RoundedCornerShape(22.dp))
             .padding(16.dp)
-            .semantics { contentDescription = "유튜브 레시피 데모" }
+            .semantics { contentDescription = "유튜브 레시피 불러오기" }
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -553,142 +544,49 @@ private fun FigmaYoutubeRecipeDemoCard(
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text("YouTube 레시피", color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        "DEMO",
-                        color = FigmaOrange,
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(9.dp))
-                            .background(Color.White)
-                            .padding(horizontal = 7.dp, vertical = 4.dp)
-                    )
-                }
+                Text("YouTube 레시피", color = FigmaInk, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(2.dp))
-                Text("영상 링크로 재료와 조리 단계를 만들어요", color = FigmaMuted, fontSize = 10.sp)
+                Text("공개 영상의 자막으로 재료와 조리 단계를 만들어요", color = FigmaMuted, fontSize = 10.sp)
             }
         }
 
         Spacer(Modifier.height(14.dp))
-        when (stage) {
-            YoutubeRecipeDemoStage.INPUT -> {
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it.trim() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "YouTube 영상 링크 입력" },
-                    label = { Text("YouTube 영상 링크", fontSize = 11.sp) },
-                    placeholder = { Text("https://youtu.be/...", fontSize = 11.sp) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.White,
-                        unfocusedContainerColor = Color.White,
-                        focusedIndicatorColor = FigmaOrange,
-                        unfocusedIndicatorColor = FigmaDivider
-                    )
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(onClick = { url = "https://youtu.be/ttaracook-demo" }) {
-                        Text("데모 링크 불러오기", color = FigmaOrange, fontSize = 10.sp)
-                    }
-                    Text("자막과 장면을 함께 분석해요", color = FigmaMuted, fontSize = 9.sp)
-                }
-                Button(
-                    onClick = { stage = YoutubeRecipeDemoStage.ANALYZING },
-                    enabled = validUrl && recipe != null,
-                    modifier = Modifier.fillMaxWidth().height(46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = FigmaOrange,
-                        disabledContainerColor = Color(0xFFE2E2E2)
-                    )
-                ) {
-                    Text("레시피 추출하기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-
-            YoutubeRecipeDemoStage.ANALYZING -> {
-                Column(
-                    Modifier.fillMaxWidth().height(112.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    CircularProgressIndicator(color = FigmaOrange, modifier = Modifier.size(30.dp), strokeWidth = 3.dp)
-                    Spacer(Modifier.height(10.dp))
-                    Text("영상에서 레시피를 찾고 있어요", color = FigmaInk, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("자막 · 재료 · 조리 장면 분석 중", color = FigmaMuted, fontSize = 10.sp)
-                }
-            }
-
-            YoutubeRecipeDemoStage.RESULT -> {
-                if (recipe == null) {
-                    FigmaMessageCard("레시피를 만들 수 없어요", "기본 레시피를 먼저 불러와 주세요.")
-                } else {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(112.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.White)
-                    ) {
-                        Box(Modifier.width(126.dp).height(112.dp)) {
-                            FigmaResourceImage(
-                                figmaHomeRecipeImageResource(recipe, R.drawable.kimchi_fried_rice),
-                                "추출된 ${recipe.title} 대표 이미지",
-                                Modifier.fillMaxSize(),
-                                0.dp
-                            )
-                            Box(
-                                Modifier.align(Alignment.Center).size(34.dp).clip(CircleShape).background(Color(0xDDFF0033)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("▶", color = Color.White, fontSize = 12.sp)
-                            }
-                        }
-                        Column(Modifier.weight(1f).padding(12.dp)) {
-                            Text("● 영상 분석 완료", color = FigmaGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(5.dp))
-                            Text(recipe.title, color = FigmaInk, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "재료 ${recipe.ingredients.size}개 · ${recipe.steps.size}단계 · ${recipe.totalDurationLabel}",
-                                color = FigmaMuted,
-                                fontSize = 9.sp
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Text("YouTube 영상에서 추출", color = FigmaOrange, fontSize = 9.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = onOpenRecipe,
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = FigmaOrange)
-                    ) {
-                        Text("레시피 확인하고 요리하기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                    TextButton(
-                        onClick = {
-                            url = ""
-                            stage = YoutubeRecipeDemoStage.INPUT
-                        },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) {
-                        Text("다른 영상 불러오기", color = FigmaMuted, fontSize = 10.sp)
-                    }
-                }
-            }
+        OutlinedTextField(
+            value = url,
+            onValueChange = { url = it.trim() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = "YouTube 영상 링크 입력" },
+            label = { Text("YouTube 영상 링크", fontSize = 11.sp) },
+            placeholder = { Text("https://youtu.be/...", fontSize = 11.sp) },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = Color.White,
+                focusedIndicatorColor = FigmaOrange,
+                unfocusedIndicatorColor = FigmaDivider
+            )
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { onExtract(url) },
+            enabled = validUrl,
+            modifier = Modifier.fillMaxWidth().height(46.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = FigmaOrange,
+                disabledContainerColor = Color(0xFFE2E2E2)
+            )
+        ) {
+            Text("레시피 추출하기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "자막 분석에 보통 1~2분 걸려요. 결과는 저장 전에 편집기에서 확인할 수 있어요.",
+            color = FigmaMuted,
+            fontSize = 9.sp
+        )
     }
 }
 
@@ -2459,6 +2357,7 @@ private fun FigmaCompareStage(baselineUri: String, currentUri: String?, modifier
 internal fun FigmaRecipeEditorScreen(
     existing: Recipe?,
     importedDraft: Recipe?,
+    initialYoutubeUrl: String,
     isImporting: Boolean,
     importError: String?,
     importWarnings: List<String>,
@@ -2467,7 +2366,7 @@ internal fun FigmaRecipeEditorScreen(
     onSave: (Recipe) -> Unit
 ) {
     val initialRecipe = importedDraft ?: existing
-    var youtubeUrl by remember(existing?.id) { mutableStateOf("") }
+    var youtubeUrl by remember(existing?.id) { mutableStateOf(initialYoutubeUrl) }
     var title by remember(initialRecipe) { mutableStateOf(initialRecipe?.title.orEmpty()) }
     var ingredientsText by remember(initialRecipe) { mutableStateOf(initialRecipe?.ingredients?.joinToString("\n") { "${it.name}: ${it.amount}" }.orEmpty()) }
     var steps by remember(initialRecipe) { mutableStateOf(initialRecipe?.steps.orEmpty()) }
@@ -2634,11 +2533,27 @@ internal fun FigmaRecipeEditorScreen(
                     enabled = youtubeUrl.isNotBlank() && !isImporting
                 )
                 if (isImporting) {
+                    // 실측 지연이 50초에서 140초까지 흔들린다(notes/recipe-extraction-mvp.md).
+                    // 막대만 돌면 멈춘 것처럼 보이므로 경과 초와 예상 시간을 함께 말해준다.
+                    var elapsedSeconds by remember { mutableStateOf(0) }
+                    LaunchedEffect(Unit) {
+                        elapsedSeconds = 0
+                        while (true) {
+                            delay(1_000L)
+                            elapsedSeconds += 1
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                     LinearProgressIndicator(
                         modifier = Modifier.fillMaxWidth(),
                         color = FigmaOrange,
                         trackColor = FigmaWarmIcon
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "${elapsedSeconds}초 경과 · 보통 1~2분 걸려요. 화면을 그대로 두세요.",
+                        color = FigmaMuted,
+                        fontSize = 10.sp
                     )
                 }
                 importError?.let {
