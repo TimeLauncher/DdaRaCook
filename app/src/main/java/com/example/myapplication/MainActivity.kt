@@ -6,12 +6,15 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.speech.tts.UtteranceProgressListener
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -64,6 +67,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -106,12 +110,16 @@ import com.example.myapplication.ui.theme.MyApplicationTheme
 import com.example.myapplication.ui.theme.Pan
 import com.example.myapplication.ui.theme.PanDark
 import com.example.myapplication.ui.theme.Rim
+import com.example.myapplication.voice.VoiceAudioRouter
+import com.example.myapplication.voice.VoiceInputRouteMode
+import com.example.myapplication.voice.VoiceRouteStatus
 import com.example.myapplication.voice.WakeWordController
 import com.example.myapplication.voice.WakeWordStatus
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -156,6 +164,20 @@ private fun TtaraCookApp(
     val wakeControllerHolder = remember { arrayOfNulls<WakeWordController>(1) }
     val speechControllerHolder = remember { arrayOfNulls<SpeechController>(1) }
     var wakeWordStatus by remember { mutableStateOf(WakeWordStatus("음성 호출 준비 전")) }
+    var voiceRouteStatus by remember { mutableStateOf(VoiceRouteStatus()) }
+    val voiceAudioRouter = remember(context) {
+        // 안경 마이크는 조리 내내 잡는다. 폰 마이크로 내려가지 않는다.
+        VoiceAudioRouter(
+            context = context,
+            onStatus = { voiceRouteStatus = it },
+            preferredMode = VoiceInputRouteMode.GLASSES_ALWAYS
+        )
+    }
+    val voiceCoroutineScope = rememberCoroutineScope()
+    val displayedWakeWordStatus = wakeWordStatus.copy(
+        message = "${wakeWordStatus.message} · ${voiceRouteStatus.message}",
+        error = wakeWordStatus.error || voiceRouteStatus.error
+    )
     val speechController = rememberSpeechController(
         context = context,
         onTranscript = sessionViewModel::handleVoiceTranscript,
@@ -164,8 +186,14 @@ private fun TtaraCookApp(
         onRecognitionFinished = {
             speechControllerHolder[0]?.recognitionFinished()
         },
+        onPrepareListening = voiceAudioRouter::prepareCommandRoute,
         onAudioUseChanged = { active ->
-            if (active) wakeControllerHolder[0]?.pause() else wakeControllerHolder[0]?.resume()
+            if (active) {
+                wakeControllerHolder[0]?.pause()
+            } else {
+                voiceAudioRouter.finishCommand()
+                wakeControllerHolder[0]?.resume()
+            }
         }
     )
     speechControllerHolder[0] = speechController
@@ -173,10 +201,15 @@ private fun TtaraCookApp(
         WakeWordController(
             context = context,
             onWakeWord = {
-                speechController.speak(
-                    message = "네.",
-                    onDone = speechController::startListening
-                )
+                voiceCoroutineScope.launch {
+                    val routeRequested = voiceAudioRouter.prepareCommandRoute()
+                    val glassesRouteReady = routeRequested &&
+                        voiceAudioRouter.awaitGlassesRouteActive()
+                    speechController.playAcknowledgement(
+                        useCommunicationRoute = glassesRouteReady,
+                        onDone = speechController::startListening
+                    )
+                }
             },
             onStatus = { wakeWordStatus = it }
         )
@@ -299,12 +332,32 @@ private fun TtaraCookApp(
         voiceScreenActive,
         uiState.audioPermissionGranted,
         appInForeground,
-        wakeWordController
+        wakeWordController,
+        speechController,
+        voiceAudioRouter
     ) {
         if (appInForeground && voiceScreenActive && uiState.audioPermissionGranted) {
+            // 안경 HFP 링크는 붙는 데 수 초가 걸린다. 1.5초에 포기하고 confirmWakeWordRoute() 로
+            // 내려가면 폰 마이크로 조용히 바뀐다 — 실측에서 안경이 계속 audioActive=false 였다.
+            // 안경 마이크는 무조건이므로 넉넉히 기다리고, 안 붙으면 다시 요청한다.
+            var glassesReady = false
+            repeat(GLASSES_ROUTE_MAX_ATTEMPTS) { attempt ->
+                if (glassesReady) return@repeat
+                voiceAudioRouter.startVoiceSession()
+                glassesReady = voiceAudioRouter.awaitGlassesRouteActive(
+                    timeoutMs = GLASSES_ROUTE_WAIT_MS
+                )
+                Log.i(
+                    "VoiceRoute",
+                    "glasses route attempt=${attempt + 1} ready=$glassesReady " +
+                        "mode=${voiceAudioRouter.activeMode}"
+                )
+            }
             wakeWordController.activate()
         } else {
             wakeWordController.deactivate()
+            speechController.cancelListening()
+            voiceAudioRouter.stopVoiceSession()
         }
     }
 
@@ -323,6 +376,10 @@ private fun TtaraCookApp(
             }
             speechController.release()
         }
+    }
+
+    DisposableEffect(voiceAudioRouter) {
+        onDispose { voiceAudioRouter.stopVoiceSession() }
     }
 
     val continueAutoFromButton = {
@@ -420,7 +477,7 @@ private fun TtaraCookApp(
 
                 AppScreen.S5_COOKING -> FigmaCookingScreen(
                     uiState = uiState,
-                    wakeWordStatus = wakeWordStatus,
+                    wakeWordStatus = displayedWakeWordStatus,
                     onStartInspection = if (uiState.isPresentationSimulation) {
                         sessionViewModel::revealPresentationCapture
                     } else {
@@ -451,7 +508,7 @@ private fun TtaraCookApp(
 
                 AppScreen.S6_STEP_DONE -> FigmaStepDoneScreen(
                     uiState = uiState,
-                    wakeWordStatus = wakeWordStatus,
+                    wakeWordStatus = displayedWakeWordStatus,
                     onContinue = continueAutoFromButton,
                     onUndo = sessionViewModel::moveToPreviousStep,
                     onFinishParallelTimer = sessionViewModel::debugFinishParallelTimer,
@@ -462,14 +519,14 @@ private fun TtaraCookApp(
 
                 AppScreen.S7_NEEDS_VIEW -> FigmaNeedsViewScreen(
                     uiState = uiState,
-                    wakeWordStatus = wakeWordStatus,
+                    wakeWordStatus = displayedWakeWordStatus,
                     onRetry = sessionViewModel::triggerImmediateInspection,
                     onNext = continueAutoFromButton
                 )
 
                 AppScreen.S8_MANUAL -> FigmaManualModeScreen(
                     uiState = uiState,
-                    wakeWordStatus = wakeWordStatus,
+                    wakeWordStatus = displayedWakeWordStatus,
                     onResumeAuto = sessionViewModel::resumeAutoMode,
                     onPickGalleryBaseline = { galleryBaselineLauncher.launch(arrayOf("image/*")) },
                     onPickGalleryCurrent = { galleryCurrentLauncher.launch(arrayOf("image/*")) },
@@ -1890,22 +1947,76 @@ internal fun statusPalette(tone: BannerTone): StatusPalette = when (tone) {
     BannerTone.Neutral -> StatusPalette(PanDark, Rim)
 }
 
+/** 안경 HFP 경로가 붙기를 기다리는 시간. SCO 협상은 1.5초로는 모자란다. */
+private const val GLASSES_ROUTE_WAIT_MS = 6_000L
+
+/** 경로가 안 붙었을 때 다시 요청하는 횟수. 폰 마이크로 내려가지 않는다. */
+private const val GLASSES_ROUTE_MAX_ATTEMPTS = 3
+
 private class SpeechController(
+    context: Context,
     private val textToSpeech: TextToSpeech?,
     private val speechRecognizer: SpeechRecognizer?,
     private val onTranscript: (String) -> Unit,
     private val onListeningChanged: (Boolean) -> Unit,
     private val onError: (String) -> Unit,
+    private val onPrepareListening: () -> Boolean,
     private val onAudioUseChanged: (Boolean) -> Unit
 ) {
+    private companion object {
+        private const val ACKNOWLEDGEMENT_SOUND_MS = 700
+        private const val ACKNOWLEDGEMENT_VOLUME = 0.7f
+        private const val ACKNOWLEDGEMENT_GUARD_MS = 70L
+
+        private fun createAcknowledgementPlayer(
+            context: Context,
+            usage: Int
+        ): MediaPlayer? = runCatching {
+            context.resources.openRawResourceFd(R.raw.acknowledgement_ding).use { descriptor ->
+                MediaPlayer().apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(usage)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    setDataSource(
+                        descriptor.fileDescriptor,
+                        descriptor.startOffset,
+                        descriptor.length
+                    )
+                    setVolume(ACKNOWLEDGEMENT_VOLUME, ACKNOWLEDGEMENT_VOLUME)
+                    prepare()
+                }
+            }
+        }.getOrNull()
+    }
+
+    private data class SpeechRequest(
+        val message: String,
+        val onStart: (() -> Unit)?,
+        val onDone: (() -> Unit)?
+    )
+
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val communicationAcknowledgementPlayer = createAcknowledgementPlayer(
+        context = context,
+        usage = AudioAttributes.USAGE_VOICE_COMMUNICATION
+    )
+    private val fallbackAcknowledgementPlayer = createAcknowledgementPlayer(
+        context = context,
+        usage = AudioAttributes.USAGE_MEDIA
+    )
     private val startCallbacks = mutableMapOf<String, () -> Unit>()
     private val completionCallbacks = mutableMapOf<String, () -> Unit>()
     private var utteranceSequence = 0L
+    private var acknowledgementSequence = 0L
     private var activeUtteranceId: String? = null
+    private var acknowledgementActive = false
     private var ttsActive = false
     private var recognitionActive = false
     private var reportedAudioUseActive = false
+    private var deferredSpeech: SpeechRequest? = null
 
     init {
         textToSpeech?.setOnUtteranceProgressListener(
@@ -1942,32 +2053,78 @@ private class SpeechController(
         onStart: (() -> Unit)? = null,
         onDone: (() -> Unit)? = null
     ) {
+        val request = SpeechRequest(message, onStart, onDone)
+        if (acknowledgementActive || recognitionActive) {
+            deferredSpeech = request
+            return
+        }
+        speakNow(request)
+    }
+
+    private fun speakNow(request: SpeechRequest) {
         val tts = textToSpeech
         if (tts == null) {
-            onStart?.invoke()
-            onDone?.invoke()
+            request.onStart?.invoke()
+            request.onDone?.invoke()
+            reportAudioUse()
             return
         }
         utteranceSequence += 1
         val utteranceId = "ttara-cook-$utteranceSequence"
         activeUtteranceId = utteranceId
-        if (onStart != null) startCallbacks[utteranceId] = onStart
-        if (onDone != null) completionCallbacks[utteranceId] = onDone
+        if (request.onStart != null) startCallbacks[utteranceId] = request.onStart
+        if (request.onDone != null) completionCallbacks[utteranceId] = request.onDone
         ttsActive = true
         reportAudioUse()
-        val result = tts.speak(message, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
+        val result = tts.speak(request.message, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
         if (result == TextToSpeech.ERROR) {
             startCallbacks.remove(utteranceId)?.invoke()
             completeUtterance(utteranceId, runCompletion = true)
         }
     }
 
+    fun playAcknowledgement(
+        useCommunicationRoute: Boolean,
+        onDone: () -> Unit
+    ) {
+        if (acknowledgementActive || recognitionActive) return
+        acknowledgementSequence += 1
+        val sequence = acknowledgementSequence
+        acknowledgementActive = true
+        stopSpeaking()
+        reportAudioUse()
+        runCatching {
+            val player = if (useCommunicationRoute) {
+                communicationAcknowledgementPlayer
+            } else {
+                fallbackAcknowledgementPlayer
+            }
+            player?.seekTo(0)
+            player?.start()
+        }
+        mainHandler.postDelayed(
+            {
+                if (sequence != acknowledgementSequence || !acknowledgementActive) return@postDelayed
+                stopAcknowledgementSound()
+                acknowledgementActive = false
+                onDone()
+                reportAudioUse()
+            },
+            ACKNOWLEDGEMENT_SOUND_MS + ACKNOWLEDGEMENT_GUARD_MS
+        )
+    }
+
     fun startListening() {
         val recognizer = speechRecognizer
         if (recognizer == null) {
+            recognitionActive = false
+            playDeferredSpeechOrReportAudioUse()
             onError("이 기기에서는 음성 인식을 사용할 수 없습니다.")
             return
         }
+        recognitionActive = true
+        reportAudioUse()
+        runCatching(onPrepareListening)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.KOREAN.toLanguageTag())
@@ -1975,19 +2132,18 @@ private class SpeechController(
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_000L)
         }
-        recognitionActive = true
-        reportAudioUse()
         onListeningChanged(true)
         runCatching { recognizer.startListening(intent) }
             .onFailure { error ->
                 onListeningChanged(false)
                 recognitionActive = false
-                reportAudioUse()
+                playDeferredSpeechOrReportAudioUse()
                 onError("음성 인식을 시작하지 못했습니다: ${error.message ?: error.javaClass.simpleName}")
             }
     }
 
     fun stopSpeaking() {
+        deferredSpeech = null
         activeUtteranceId?.let { utteranceId ->
             startCallbacks.remove(utteranceId)
             completionCallbacks.remove(utteranceId)
@@ -1998,11 +2154,29 @@ private class SpeechController(
         reportAudioUse()
     }
 
+    fun cancelListening() {
+        acknowledgementSequence += 1
+        acknowledgementActive = false
+        deferredSpeech = null
+        stopAcknowledgementSound()
+        runCatching { speechRecognizer?.cancel() }
+        val wasRecognitionActive = recognitionActive
+        recognitionActive = false
+        if (wasRecognitionActive) onListeningChanged(false)
+        reportAudioUse()
+    }
+
     fun release() {
+        acknowledgementSequence += 1
+        acknowledgementActive = false
+        deferredSpeech = null
         startCallbacks.clear()
         completionCallbacks.clear()
         activeUtteranceId = null
         recognitionActive = false
+        stopAcknowledgementSound()
+        communicationAcknowledgementPlayer?.release()
+        fallbackAcknowledgementPlayer?.release()
         runCatching { speechRecognizer?.cancel() }
         speechRecognizer?.destroy()
         textToSpeech?.shutdown()
@@ -2025,11 +2199,33 @@ private class SpeechController(
 
     fun recognitionFinished() {
         recognitionActive = false
-        reportAudioUse()
+        playDeferredSpeechOrReportAudioUse()
+    }
+
+    private fun playDeferredSpeechOrReportAudioUse() {
+        val nextSpeech = deferredSpeech
+        deferredSpeech = null
+        if (nextSpeech != null) {
+            speakNow(nextSpeech)
+        } else {
+            reportAudioUse()
+        }
+    }
+
+    private fun stopAcknowledgementSound() {
+        listOfNotNull(
+            communicationAcknowledgementPlayer,
+            fallbackAcknowledgementPlayer
+        ).forEach { player ->
+            runCatching {
+                if (player.isPlaying) player.pause()
+                player.seekTo(0)
+            }
+        }
     }
 
     private fun reportAudioUse() {
-        val active = ttsActive || recognitionActive
+        val active = acknowledgementActive || ttsActive || recognitionActive
         if (reportedAudioUseActive == active) return
         reportedAudioUseActive = active
         onAudioUseChanged(active)
@@ -2043,6 +2239,7 @@ private fun rememberSpeechController(
     onListeningChanged: (Boolean) -> Unit,
     onError: (String) -> Unit,
     onRecognitionFinished: () -> Unit,
+    onPrepareListening: () -> Boolean,
     onAudioUseChanged: (Boolean) -> Unit
 ): SpeechController {
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
@@ -2098,11 +2295,13 @@ private fun rememberSpeechController(
 
     return remember(tts, recognizer) {
         SpeechController(
+            context = context.applicationContext,
             textToSpeech = tts,
             speechRecognizer = recognizer,
             onTranscript = onTranscript,
             onListeningChanged = onListeningChanged,
             onError = onError,
+            onPrepareListening = onPrepareListening,
             onAudioUseChanged = onAudioUseChanged
         )
     }
