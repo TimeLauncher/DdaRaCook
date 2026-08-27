@@ -1479,6 +1479,17 @@ internal fun FigmaCookingScreen(
                     Text(if (wakeWordStatus.listening) "듣고 있어요 · “따라쿡”이라고 불러보세요" else wakeWordStatus.message, color = Color(0xFF4D3F31), fontSize = 11.sp, fontWeight = FontWeight.Medium)
                 }
 
+                uiState.stepTimerRemainingSeconds?.let { remaining ->
+                    Spacer(Modifier.height(10.dp))
+                    FigmaMessageCard(
+                        "${step.order}단계 타이머",
+                        if (remaining > 0) {
+                            "${formatUiDuration(remaining)} 남음 · 끝나면 자동으로 넘어가요"
+                        } else {
+                            "시간이 다 됐어요."
+                        }
+                    )
+                }
                 uiState.parallelTimerRemainingSeconds?.let { remaining ->
                     Spacer(Modifier.height(10.dp))
                     FigmaMessageCard(session.parallelTimerLabel ?: "타이머", if (remaining > 0) "${formatUiDuration(remaining)} 남음" else session.parallelTimerMessage ?: "타이머가 끝났습니다.")
@@ -2961,6 +2972,9 @@ private fun figmaGlassesConnectionLabel(state: WearableCameraState): String = wh
 }
 
 private fun inspectionMessage(uiState: CookingSessionUiState, step: RecipeStep): String = when {
+    // 타이머로 도는 시간 전용 단계는 손대지 않아도 넘어간다. 사진은 찍지 않는다.
+    uiState.stepTimerRemainingSeconds != null ->
+        "카메라 없이 시간으로 진행해요 · ${formatUiDuration(uiState.stepTimerRemainingSeconds)} 남음"
     !step.isAutoCheck || step.checkType == CheckType.TIMER_ONLY -> "수동으로 다음 단계로 이동해 주세요"
     uiState.judgingInFlight -> "현재 상태를 확인하고 있어요"
     uiState.nextInspectionInSeconds != null -> "${uiState.nextInspectionInSeconds}초 뒤 자동으로 상태를 확인할게요"

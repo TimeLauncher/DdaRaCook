@@ -76,7 +76,13 @@ data class RecipeStep(
      * 앞 단계가 "재료를 넣고 다음이라고 말해주세요"인 경우, 사용자가 "다음"이라고 한 그 시점이
      * 곧 재료가 팬에 들어간 시점이다. 기준점을 시간(15초)으로 추측하지 않고 사용자에게 받는다.
      */
-    val baselineOnStepStart: Boolean = false
+    val baselineOnStepStart: Boolean = false,
+    /**
+     * 시간 전용 단계의 타이머가 다 됐을 때 읽어주는 문구. F6-6에 따라 2문장 이내.
+     *
+     * 비워두면 "N단계 시간이 다 됐어요"로 읽는다. 타이머 길이는 `maxExpectedSeconds` 다.
+     */
+    val timerDoneAnnouncement: String? = null
 )
 
 /**
@@ -107,7 +113,16 @@ data class InspectionPolicy(
     val maxExpectedSeconds: Int
 )
 
+/** 검사 정책이 없는 단계에 쓰는 기본 간격. 정책이 있으면 언제나 정책이 이긴다. */
 internal const val AUTOMATIC_INSPECTION_INTERVAL_SECONDS = 30
+
+/** 단계 시작 후 첫 검사까지. 재료가 팬·도마에 올라갈 시간을 준다. */
+internal fun RecipeStep.firstInspectionDelaySeconds(): Int =
+    inspectionPolicy?.earliestCheckSeconds ?: AUTOMATIC_INSPECTION_INTERVAL_SECONDS
+
+/** 첫 검사 이후의 재검사 간격. */
+internal fun RecipeStep.repeatInspectionDelaySeconds(): Int =
+    inspectionPolicy?.checkIntervalSeconds ?: AUTOMATIC_INSPECTION_INTERVAL_SECONDS
 
 /**
  * `needsStartImage` 단계에서 기준 사진을 찍기까지 기다리는 시간.
@@ -119,28 +134,6 @@ internal const val BASELINE_CAPTURE_DELAY_SECONDS = 15
 
 /** 검사 차례인데 기준 사진이 아직 없을 때 다시 시도하기까지의 간격. */
 internal const val BASELINE_WAIT_RETRY_SECONDS = 5
-
-internal fun List<Recipe>.withAutomaticInspectionInterval(): List<Recipe> = map { recipe ->
-    recipe.copy(
-        steps = recipe.steps.map { step ->
-            val policy = step.inspectionPolicy
-            if (!step.isAutoCheck || policy == null) {
-                step
-            } else {
-                step.copy(
-                    inspectionPolicy = policy.copy(
-                        earliestCheckSeconds = AUTOMATIC_INSPECTION_INTERVAL_SECONDS,
-                        checkIntervalSeconds = AUTOMATIC_INSPECTION_INTERVAL_SECONDS,
-                        maxExpectedSeconds = maxOf(
-                            policy.maxExpectedSeconds,
-                            AUTOMATIC_INSPECTION_INTERVAL_SECONDS
-                        )
-                    )
-                )
-            }
-        }
-    )
-}
 
 enum class CheckType(val label: String, val userLabel: String) {
     PRESENCE("존재 여부", "자동 확인"),

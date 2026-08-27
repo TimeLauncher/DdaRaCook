@@ -8,6 +8,7 @@ import com.example.myapplication.ui.theme.Herb
 import com.example.myapplication.ui.theme.Rim
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -59,24 +60,64 @@ class CookingDomainTest {
     }
 
     @Test
-    fun persistedRecipesAreMigratedToThirtySecondAutomaticInspection() {
-        val migrated = RecipeFixtures.sampleRecipes().map { recipe ->
-            recipe.copy(steps = recipe.steps.map { step ->
-                step.copy(
-                    inspectionPolicy = step.inspectionPolicy?.copy(
-                        earliestCheckSeconds = 8,
-                        checkIntervalSeconds = 10
-                    )
-                )
-            })
-        }.withAutomaticInspectionInterval()
+    fun inspectionScheduleFollowsTheStepPolicyInsteadOfAFixedInterval() {
+        val step = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps.first { it.order == 1 }
 
-        val policies = migrated.flatMap(Recipe::steps)
-            .filter(RecipeStep::isAutoCheck)
-            .mapNotNull(RecipeStep::inspectionPolicy)
-        assertTrue(policies.isNotEmpty())
-        assertTrue(policies.all { it.earliestCheckSeconds == 30 })
-        assertTrue(policies.all { it.checkIntervalSeconds == 30 })
+        // 단계 시작 후 첫 검사와 그 뒤의 재검사는 서로 다른 값을 쓴다.
+        assertEquals(15, step.firstInspectionDelaySeconds())
+        assertEquals(30, step.repeatInspectionDelaySeconds())
+    }
+
+    @Test
+    fun soyaAutomaticStepsWaitFifteenSecondsExceptTheRelativeStep() {
+        val steps = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps.filter(RecipeStep::isAutoCheck)
+            .associateBy(RecipeStep::order)
+
+        assertEquals(listOf(1, 3, 4), steps.keys.sorted())
+        assertEquals(15, steps.getValue(1).firstInspectionDelaySeconds())
+        assertEquals(15, steps.getValue(3).firstInspectionDelaySeconds())
+        // 4단계는 3단계 DONE 사진을 기준으로 삼는 상대 판정이라 현행 30초를 유지한다.
+        assertEquals(30, steps.getValue(4).firstInspectionDelaySeconds())
+        assertTrue(steps.values.all { it.repeatInspectionDelaySeconds() == 30 })
+    }
+
+    @Test
+    fun stepsWithoutAPolicyFallBackToTheDefaultInterval() {
+        val step = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps.first { it.order == 2 }
+
+        assertNull(step.inspectionPolicy)
+        assertEquals(AUTOMATIC_INSPECTION_INTERVAL_SECONDS, step.firstInspectionDelaySeconds())
+        assertEquals(AUTOMATIC_INSPECTION_INTERVAL_SECONDS, step.repeatInspectionDelaySeconds())
+    }
+
+    @Test
+    fun onlyTimerOnlyStepsWithAPolicyCarryAStepTimer() {
+        val steps = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps.associateBy(RecipeStep::order)
+
+        // 5단계는 2분 타이머로 자동 종료되고, 2단계는 사용자의 "다음"을 기다린다.
+        assertEquals(120, steps.getValue(5).stepTimerSeconds())
+        assertNull(steps.getValue(2).stepTimerSeconds())
+        // 사진으로 판정하는 단계는 타이머를 갖지 않는다.
+        assertNull(steps.getValue(1).stepTimerSeconds())
+        assertNull(steps.getValue(4).stepTimerSeconds())
+    }
+
+    @Test
+    fun secondStepTellsTheUserToSayNext() {
+        val step = RecipeFixtures.sampleRecipes()
+            .first { it.id == "sausage-vegetable-stir-fry" }
+            .steps.first { it.order == 2 }
+
+        // 자동 판정이 없는 단계는 어떻게 넘어가는지 음성으로 알려줘야 한다.
+        assertTrue(step.voicePrompt.contains("다음이라고 말해주세요"))
     }
 
 

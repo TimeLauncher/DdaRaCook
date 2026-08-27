@@ -35,8 +35,17 @@ data class CookingSession(
     val parallelTimerMessage: String? = null,
     val parallelTimerFired: Boolean = false,
     /** 다음 단계가 `waitsForParallelTimer`라 자동 진행을 붙잡고 있는 중인가. */
-    val advanceBlockedByTimer: Boolean = false
+    val advanceBlockedByTimer: Boolean = false,
+    /** 단계 타이머(시간 전용 단계)가 이미 만료 안내를 낸 단계 번호들. 1초 티커의 중복 발화를 막는다. */
+    val stepTimerFiredOrders: Set<Int> = emptySet()
 )
+
+/**
+ * 시간 전용 단계의 타이머 길이. 사진으로 판정하지 않고 이 시간이 지나면 자동으로 넘어간다.
+ * 별도 필드를 두지 않고 `maxExpectedSeconds` 를 쓴다 — 화면 진행바가 이미 같은 값을 그린다.
+ */
+fun RecipeStep.stepTimerSeconds(): Int? =
+    if (checkType == CheckType.TIMER_ONLY) inspectionPolicy?.maxExpectedSeconds else null
 
 /** 병렬 타이머 남은 초. 타이머가 없으면 null, 다 됐으면 0. */
 fun CookingSession.parallelTimerRemainingSeconds(nowMs: Long = System.currentTimeMillis()): Int? {

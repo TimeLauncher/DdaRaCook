@@ -30,6 +30,7 @@ internal sealed interface RouteAttempt {
 internal interface CommunicationRoutePort {
     fun requestGlassesRoute(): RouteAttempt
     fun isGlassesRouteActive(): Boolean
+    fun hasBluetoothCommunicationRoute(): Boolean
     fun releaseRoute()
 }
 
@@ -59,8 +60,11 @@ class VoiceAudioRouter internal constructor(
         private set
 
     private var commandRouteActive = false
+    private var voiceSessionActive = false
+    private var restoreGlassesRouteAfterCapture = false
 
     fun startVoiceSession(): VoiceInputRouteMode {
+        voiceSessionActive = true
         commandRouteActive = false
         communicationRoute.releaseRoute()
 
@@ -181,7 +185,65 @@ class VoiceAudioRouter internal constructor(
         }
     }
 
+    /**
+     * Releases the glasses HFP/SCO route while DAT owns the camera link.
+     *
+     * Pausing the recorder alone is not enough for this experiment: Android must clear the selected
+     * Bluetooth communication device. The caller pauses wake-word recording first, then waits here
+     * until the system route is actually gone (or the bounded diagnostic timeout expires).
+     */
+    suspend fun suspendGlassesRouteForCamera(
+        timeoutMs: Long = CAMERA_ROUTE_RELEASE_TIMEOUT_MS,
+        pollIntervalMs: Long = CAMERA_ROUTE_POLL_INTERVAL_MS
+    ): Boolean {
+        require(timeoutMs >= 0L)
+        require(pollIntervalMs > 0L)
+        if (!voiceSessionActive) return true
+
+        restoreGlassesRouteAfterCapture =
+            activeMode == VoiceInputRouteMode.GLASSES_ALWAYS ||
+                communicationRoute.isGlassesRouteActive()
+        commandRouteActive = false
+        communicationRoute.releaseRoute()
+
+        val released = awaitBluetoothCommunicationRoute(released = true, timeoutMs, pollIntervalMs)
+        onStatus(
+            VoiceRouteStatus(
+                mode = activeMode,
+                message = if (released) {
+                    "촬영 중 안경 마이크 경로 일시 해제"
+                } else {
+                    "안경 마이크 경로 해제 확인 시간 초과"
+                },
+                glassesRouteActive = false,
+                error = !released
+            )
+        )
+        return released
+    }
+
+    /** Restores the full-session glasses route after DAT camera cleanup. */
+    suspend fun restoreGlassesRouteAfterCamera(): Boolean {
+        val shouldRestore = restoreGlassesRouteAfterCapture
+        restoreGlassesRouteAfterCapture = false
+        if (!shouldRestore || !voiceSessionActive) return true
+
+        repeat(CAMERA_ROUTE_RESTORE_MAX_ATTEMPTS) {
+            startVoiceSession()
+            if (
+                activeMode == VoiceInputRouteMode.GLASSES_ALWAYS &&
+                awaitGlassesRouteActive(timeoutMs = CAMERA_ROUTE_RESTORE_TIMEOUT_MS)
+            ) {
+                return true
+            }
+        }
+        publishPhoneWakeStatus("촬영 후 안경 마이크 경로를 복구하지 못함", error = true)
+        return false
+    }
+
     fun stopVoiceSession() {
+        voiceSessionActive = false
+        restoreGlassesRouteAfterCapture = false
         commandRouteActive = false
         communicationRoute.releaseRoute()
         activeMode = preferredMode
@@ -202,6 +264,32 @@ class VoiceAudioRouter internal constructor(
                 error = error
             )
         )
+    }
+
+    private suspend fun awaitBluetoothCommunicationRoute(
+        released: Boolean,
+        timeoutMs: Long,
+        pollIntervalMs: Long
+    ): Boolean {
+        fun reachedTarget(): Boolean =
+            communicationRoute.hasBluetoothCommunicationRoute() != released
+
+        if (reachedTarget()) return true
+        var elapsedMs = 0L
+        while (elapsedMs < timeoutMs) {
+            val waitMs = minOf(pollIntervalMs, timeoutMs - elapsedMs)
+            delay(waitMs)
+            elapsedMs += waitMs
+            if (reachedTarget()) return true
+        }
+        return false
+    }
+
+    private companion object {
+        const val CAMERA_ROUTE_RELEASE_TIMEOUT_MS = 2_000L
+        const val CAMERA_ROUTE_RESTORE_TIMEOUT_MS = 4_000L
+        const val CAMERA_ROUTE_POLL_INTERVAL_MS = 100L
+        const val CAMERA_ROUTE_RESTORE_MAX_ATTEMPTS = 3
     }
 }
 
@@ -262,6 +350,15 @@ private class AndroidGlassesCommunicationRoute(context: Context) : Communication
             val selected = audioManager.communicationDevice ?: return false
             selected.id == requestedId ||
                 (selected.isBluetoothCommunicationDevice() && selected.rayBanName())
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+
+    override fun hasBluetoothCommunicationRoute(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        return try {
+            audioManager.communicationDevice?.isBluetoothCommunicationDevice() == true
         } catch (_: SecurityException) {
             false
         }

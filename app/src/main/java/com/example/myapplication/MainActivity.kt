@@ -10,6 +10,7 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -222,6 +223,39 @@ private fun TtaraCookApp(
             }
             wakeWordController.release()
         }
+    }
+    val cameraAudioInterlock = remember(wakeWordController, voiceAudioRouter) {
+        object : CameraAudioInterlock {
+            override suspend fun beforeCameraCapture(requestId: String) {
+                val startedAt = SystemClock.elapsedRealtime()
+                wakeWordController.pause()
+                val released = voiceAudioRouter.suspendGlassesRouteForCamera()
+                Log.i(
+                    "CameraAudioInterlock",
+                    "requestId=$requestId phase=before released=$released " +
+                        "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                )
+            }
+
+            override suspend fun afterCameraCapture(requestId: String) {
+                val startedAt = SystemClock.elapsedRealtime()
+                var restored = false
+                try {
+                    restored = voiceAudioRouter.restoreGlassesRouteAfterCamera()
+                } finally {
+                    wakeWordController.resume()
+                    Log.i(
+                        "CameraAudioInterlock",
+                        "requestId=$requestId phase=after restored=$restored " +
+                            "elapsedMs=${SystemClock.elapsedRealtime() - startedAt}"
+                    )
+                }
+            }
+        }
+    }
+    DisposableEffect(sessionViewModel, cameraAudioInterlock) {
+        sessionViewModel.setCameraAudioInterlock(cameraAudioInterlock)
+        onDispose { sessionViewModel.setCameraAudioInterlock(null) }
     }
     val voiceScreenActive = !uiState.isPresentationSimulation &&
         uiState.currentScreen in setOf(

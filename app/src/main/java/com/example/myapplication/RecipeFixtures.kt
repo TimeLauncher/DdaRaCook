@@ -28,7 +28,8 @@ object RecipeFixtures {
                         checkType = CheckType.STATE_TRANSITION,
                         checkCondition = "도마 위에 통째로 남은 야채 덩어리가 없는가",
                         needsStartImage = false,
-                        inspectionPolicy = InspectionPolicy(60, 40, 2, 1, 300),
+                        // 15초: 칼을 잡기도 전에 찍어봐야 확정적으로 NOT_DONE 이다.
+                        inspectionPolicy = InspectionPolicy(15, 30, 2, 1, 300),
                         targetIngredients = listOf("양파", "파프리카", "당근", "비엔나소세지"),
                         voicePrompt = "1단계. 야채를 먹기 좋은 크기로 자르고 소세지에 칼집을 내세요.",
                         isAutoCheck = true
@@ -40,9 +41,11 @@ object RecipeFixtures {
                         checkType = CheckType.TIMER_ONLY,
                         checkCondition = null,
                         needsStartImage = false,
+                        // 타이머 없이 사용자의 "다음"을 기다린다. 양념장 만드는 시간은 사람마다 다르다.
                         inspectionPolicy = null,
                         targetIngredients = listOf("케찹", "고추장", "굴소스", "올리고당", "다진마늘"),
-                        voicePrompt = "2단계. 케찹, 고추장, 굴소스, 올리고당과 다진마늘을 섞어 양념장을 만드세요.",
+                        voicePrompt = "2단계. 케찹, 고추장, 굴소스, 올리고당과 다진마늘을 섞어 양념장을 만드세요. " +
+                            "다 만드셨으면 다음이라고 말해주세요.",
                         isAutoCheck = false
                     ),
                     // 재료가 팬에 들어간 시점을 A등급 존재 판정으로 확정한다.
@@ -54,7 +57,8 @@ object RecipeFixtures {
                         checkType = CheckType.PRESENCE,
                         checkCondition = "팬 안에 소세지와 썬 야채가 들어있는가",
                         needsStartImage = false,
-                        inspectionPolicy = InspectionPolicy(30, 30, 2, 1, 90),
+                        // 15초: 기름을 두르고 재료를 옮겨 담을 시간.
+                        inspectionPolicy = InspectionPolicy(15, 30, 2, 1, 90),
                         targetIngredients = listOf("양파", "파프리카", "당근", "비엔나소세지", "식용유"),
                         voicePrompt = "3단계. 팬에 기름을 두르고 야채와 소세지를 넣으세요.",
                         isAutoCheck = true
@@ -66,7 +70,9 @@ object RecipeFixtures {
                         checkType = CheckType.STATE_TRANSITION,
                         checkCondition = "시작 시점 사진과 비교해 소세지 칼집이 벌어졌는가",
                         needsStartImage = true,
-                        inspectionPolicy = InspectionPolicy(120, 20, 3, 1, 240),
+                        // 30초는 지금까지 실제로 돌던 값이다. 레시피 원문의 "2~3분간"과는 다르므로
+                        // 2회차 평가에서 이 구간의 NOT_DONE 비율을 보고 다시 정한다.
+                        inspectionPolicy = InspectionPolicy(30, 30, 3, 1, 240),
                         targetIngredients = listOf("양파", "파프리카", "당근", "비엔나소세지"),
                         voicePrompt = "4단계. 야채와 소세지를 중약불로 볶으세요.",
                         isAutoCheck = true,
@@ -75,14 +81,18 @@ object RecipeFixtures {
                     RecipeStep(
                         order = 5,
                         imageCropTarget = ImageCropTarget.LEGACY_BOTTOM_60,
-                        instruction = "양념장을 넣고 약불로 3분간 볶는다",
+                        instruction = "양념장을 넣고 약불로 2분간 볶는다",
                         checkType = CheckType.TIMER_ONLY,
                         checkCondition = null,
                         needsStartImage = false,
-                        inspectionPolicy = InspectionPolicy(180, 30, 2, 1, 180),
+                        // maxExpectedSeconds 가 곧 타이머 길이다 (`stepTimerSeconds()`).
+                        // 120초가 지나면 사진 없이 안내하고 자동으로 세션을 마친다.
+                        inspectionPolicy = InspectionPolicy(120, 30, 2, 1, 120),
                         targetIngredients = listOf("양념장"),
-                        voicePrompt = "5단계. 양념장을 넣고 약불에서 3분간 볶되, 연기가 나거나 기포가 심하게 올라오거나 소스가 타 보이면 즉시 불을 약하게 줄이세요.",
-                        isAutoCheck = false
+                        voicePrompt = "5단계. 양념장을 넣고 약불에서 2분간 볶으세요. " +
+                            "연기가 나거나 소스가 타 보이면 즉시 불을 줄이세요.",
+                        isAutoCheck = false,
+                        timerDoneAnnouncement = "2분이 다 됐어요. 불을 꺼주세요."
                     )
                 )
             ),

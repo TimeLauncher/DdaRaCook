@@ -12,6 +12,7 @@ import com.meta.wearable.dat.camera.Camera
 import com.meta.wearable.dat.camera.Stream
 import com.meta.wearable.dat.camera.addCamera
 import com.meta.wearable.dat.camera.removeCamera
+import com.meta.wearable.dat.camera.types.CaptureError
 import com.meta.wearable.dat.camera.types.PhotoData
 import com.meta.wearable.dat.camera.types.StreamConfiguration
 import com.meta.wearable.dat.camera.types.StreamState
@@ -22,6 +23,7 @@ import com.meta.wearable.dat.core.session.DeviceSession
 import com.meta.wearable.dat.core.session.DeviceSessionState
 import com.meta.wearable.dat.core.types.Permission
 import com.meta.wearable.dat.core.types.PermissionStatus
+import com.meta.wearable.dat.core.types.DatResult
 import com.meta.wearable.dat.core.types.RegistrationState
 import java.io.ByteArrayInputStream
 import java.io.IOException
@@ -47,6 +49,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -63,12 +66,35 @@ class DatWearableCameraGateway(
 ) : WearableCameraGateway {
     companion object {
         private const val TAG = "DatCameraGateway"
-        private const val FRAME_RATE = 2
-        private const val STREAM_WARMUP_TIMEOUT_MS = 2_000L
+        /** docs/10-dat-replacement.md 가 "검증된" 조합으로 적어둔 값. */
+        private const val FRAME_RATE = 24
+        /**
+         * 첫 디코딩 프레임을 기다리는 시간.
+         *
+         * 실측상 이 프레임은 2초·6초 어느 창에서도 **한 번도 도착하지 않는다**(firstFrameAt 항상
+         * null). 기다리는 만큼 셔터만 늦어지므로 0으로 둔다. `capturePhoto()` 는 STREAMING
+         * 상태면 유효하고, 사진이 늦게 와도 이제는 슬롯을 다시 열어 받는다.
+         */
+        private const val STREAM_WARMUP_TIMEOUT_MS = 0L
         private const val PHOTO_CAPTURE_RETRY_DELAY_MS = 1_000L
         private const val PHOTO_CAPTURE_MAX_ATTEMPTS = 2
         private const val CLEANUP_TIMEOUT_MS = 5_000L
+
+        /**
+         * 셔터를 누른 뒤, SDK 가 포기한 다음에도 사진이 오기를 기다리는 시간.
+         *
+         * 실측 도착이 셔터로부터 약 17초였고 SDK 는 10초에 포기하므로 7초 남짓이면 되지만,
+         * 링크가 느린 날을 감안해 여유를 둔다. 이 시간에도 안 오면 그 촬영은 실패다.
+         */
+        private const val IN_FLIGHT_PHOTO_WAIT_MS = 15_000L
     }
+
+    /** 진단 전용 시계. 셔터 시각과 EXIF 촬영 시각을 같은 눈금으로 보기 위한 것이다. */
+    private val photoDiagnosticClock =
+        java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+
+    /** 진단: 한 번의 촬영 동안 도착한 영상 프레임 수. */
+    private var videoFrameCount = 0
 
     private val gatewayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var deviceSelector: AutoDeviceSelector? = null
@@ -309,9 +335,28 @@ class DatWearableCameraGateway(
 
             if (outcome == null) {
                 var addFailure: String? = null
+                // ⚠️ videoQuality 를 내리면 사진이 **더 느리게** 온다 (실측 2026-08-27):
+                //   HIGH · 2fps → 12.1~12.5초 · 99~104KB
+                //   LOW  · 2fps → 22.6초      · 125KB
+                // 링크 대역 경합이 병목이라는 가설은 이 결과로 기각됐다. 사진 전송이 영상
+                // 스트림의 처리량에 **올라타는** 것으로 보인다 — 영상을 줄이면 사진도 느려진다.
+                // 셔터→사진 도착 실측 (2026-08-27):
+                //   HIGH · 2fps  · 무압축 → 12.1~12.5초   ← 기준선
+                //   LOW  · 2fps  · 무압축 → 22.6초        (기각)
+                //   HIGH · 2fps  · 압축   → 23.6~24.7초   (기각)
+                //   HIGH · 24fps · 무압축 → 17.4~20.9초     (기각)
+                // 늘려도 줄여도 느려진다. 공개 API 세 손잡이를 모두 흔들어 본 결과
+                // **현재 조합이 최적**이다. 근거 없이 바꾸지 말 것.
+                // ⚠️ 이 파라미터들을 흔들어도 사진 지연은 안 줄었다(실측 2026-08-27).
+                // 원인은 스트림 설정이 아니라 **링크**였다 — 폰 Wi-Fi 가 꺼져 있어 카메라
+                // 데이터가 블루투스로 폴백되고 있었다. 그래서 영상 프레임이 0장이고
+                // 사진은 6~10KB/s 로 기어갔다. 설정은 SDK 기본 조합으로 되돌려 둔다.
+                // docs/10-dat-replacement.md 는 "검증된 MEDIUM · 24 FPS" 로 스트림을 연다고
+                // 적어두었는데 코드는 HIGH · 2 FPS 였다. 설계는 "첫 프레임 수신 뒤 capturePhoto()"
+                // 인데 프레임이 0장이라 그 전제가 무너져 있다. 문서의 조합으로 되돌려 확인한다.
                 currentSession.addCamera(
                     StreamConfiguration(
-                        videoQuality = VideoQuality.HIGH,
+                        videoQuality = VideoQuality.MEDIUM,
                         frameRate = FRAME_RATE
                     )
                 ).onSuccess { camera = it }
@@ -334,8 +379,21 @@ class DatWearableCameraGateway(
                 val errorSignal = CompletableDeferred<String>()
                 terminalSignal = CompletableDeferred()
 
+                videoFrameCount = 0
                 videoJob = launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
                     attachedStream.videoStream.collect { frame ->
+                        // 진단: 프레임이 정말 한 장도 안 오는지, 아니면 오는데 전부
+                        // codecConfig 라서 걸러지는지 가른다. 앞 세 장만 자세히 남긴다.
+                        videoFrameCount += 1
+                        if (videoFrameCount <= 3) {
+                            Log.i(
+                                TAG,
+                                "videoFrame #$videoFrameCount ${frame.width}x${frame.height} " +
+                                    "compressed=${frame.isCompressed} " +
+                                    "codecConfig=${frame.isCodecConfig} " +
+                                    "bytes=${frame.buffer.remaining()}"
+                            )
+                        }
                         if (!frame.isCodecConfig && !firstFrameSignal.isCompleted) {
                             firstFrameSignal.complete(SystemClock.elapsedRealtime())
                         }
@@ -388,12 +446,16 @@ class DatWearableCameraGateway(
                             // DAT defines STREAMING as the point where frames are flowing. Photo
                             // capture is valid in this state. Give the decoded frame collector a
                             // short warm-up window so capturePhoto() does not race stream startup.
-                            firstFrameAt = try {
-                                withTimeout(STREAM_WARMUP_TIMEOUT_MS) {
-                                    firstFrameSignal.await()
+                            firstFrameAt = if (STREAM_WARMUP_TIMEOUT_MS <= 0L) {
+                                firstFrameSignal.takeIf { it.isCompleted }?.getCompleted()
+                            } else {
+                                try {
+                                    withTimeout(STREAM_WARMUP_TIMEOUT_MS) {
+                                        firstFrameSignal.await()
+                                    }
+                                } catch (_: TimeoutCancellationException) {
+                                    null
                                 }
-                            } catch (_: TimeoutCancellationException) {
-                                null
                             }
                             mutableState.value = WearableCameraState.Capturing
                             val capturedAtEpochMs = System.currentTimeMillis()
@@ -434,6 +496,15 @@ class DatWearableCameraGateway(
                                                 capturedAtEpochMs,
                                                 bitmap
                                             )
+                                            .also {
+                                                if (it is PhotoStoreResult.Success) {
+                                                    Log.i(
+                                                        TAG,
+                                                        "saved photo ${it.value.width}x${it.value.height} " +
+                                                            "bytes=${it.value.byteSize}"
+                                                    )
+                                                }
+                                            }
                                         ) {
                                             is PhotoStoreResult.Failure -> failure(
                                                 request,
@@ -441,6 +512,7 @@ class DatWearableCameraGateway(
                                                 saved.message
                                             )
                                             is PhotoStoreResult.Success -> CaptureOutcome.Success(
+                                                // 진단: 스트림 설정이 사진 해상도에 영향을 주는지 본다.
                                                 CaptureArtifact(
                                                     requestId = request.requestId,
                                                     imageUri = saved.value.imageUri,
@@ -521,7 +593,7 @@ class DatWearableCameraGateway(
             Log.i(
                 TAG,
                 "requestId=${request.requestId} purpose=${request.purpose} " +
-                    "firstFrameAt=$firstFrameAt stoppedAt=$stoppedAt " +
+                    "videoFrames=$videoFrameCount firstFrameAt=$firstFrameAt stoppedAt=$stoppedAt " +
                     "outcome=${outcome?.javaClass?.simpleName}"
             )
         }
@@ -553,29 +625,100 @@ class DatWearableCameraGateway(
         timeoutMs: Long,
         requestId: String
     ): PhotoCaptureResult {
-        var lastFailure: PhotoCaptureResult.Failure? = null
-        repeat(PHOTO_CAPTURE_MAX_ATTEMPTS) { attemptIndex ->
-            when (val result = capturePhoto(stream, timeoutMs)) {
-                is PhotoCaptureResult.Success -> return result
-                is PhotoCaptureResult.Failure -> {
-                    lastFailure = result
-                    Log.w(
-                        TAG,
-                        "requestId=$requestId capturePhoto attempt=${attemptIndex + 1} " +
-                            "failed=${result.message}"
-                    )
-                    if (
-                        result.timedOut ||
-                        attemptIndex + 1 >= PHOTO_CAPTURE_MAX_ATTEMPTS ||
-                        stream.state.value != StreamState.STREAMING
-                    ) {
-                        return result
-                    }
+        val shutterAt = SystemClock.elapsedRealtime()
+        Log.i(
+            TAG,
+            "requestId=$requestId shutter issuedAt=${photoDiagnosticClock.format(java.util.Date())}"
+        )
+
+        // 셔터는 여기 한 번뿐이다.
+        val first = capturePhoto(stream, timeoutMs)
+        if (first is PhotoCaptureResult.Success) {
+            logDelivered(requestId, "shutter", shutterAt)
+            return first
+        }
+        val firstFailure = first as PhotoCaptureResult.Failure
+        Log.w(TAG, "requestId=$requestId shutter call failed=${firstFailure.message}")
+
+        // SDK 의 PHOTO_CAPTURE_TIMEOUT_MS(실측 10초)가 실제 사진 도착(실측 17초)보다 짧아서,
+        // 위 호출은 사진이 **오는 중**인데도 실패로 끝난다. 그때 SDK 는 대기 슬롯
+        // (StreamImpl.photoCaptureRequest)을 비우고, 뒤늦게 도착한 사진은 받을 곳이 없어 버려진다.
+        //
+        // 예전에는 capturePhoto() 를 한 번 더 불러 슬롯을 다시 열었는데, 그 호출이 안경에
+        // 촬영 명령까지 보내서 셔터가 두 번 울렸다(그리고 그 두 번째 사진은 늘 버려졌다).
+        // 여기서는 촬영 명령 없이 **슬롯만** 다시 열어 오는 중인 사진을 받는다.
+        if (stream.state.value == StreamState.STREAMING) {
+            when (val inFlight = awaitInFlightPhoto(stream, requestId)) {
+                is PhotoCaptureResult.Success -> {
+                    logDelivered(requestId, "in-flight", shutterAt)
+                    return inFlight
+                }
+                is PhotoCaptureResult.Failure -> return inFlight
+                // 슬롯에 접근할 수 없는 SDK 라면 예전처럼 재촬영으로 되돌아간다.
+                null -> {
+                    Log.w(TAG, "requestId=$requestId in-flight 대기 불가 · 재촬영으로 폴백")
                     delay(PHOTO_CAPTURE_RETRY_DELAY_MS)
+                    val retry = capturePhoto(stream, timeoutMs)
+                    if (retry is PhotoCaptureResult.Success) {
+                        logDelivered(requestId, "retry-shutter", shutterAt)
+                    }
+                    return retry
                 }
             }
         }
-        return checkNotNull(lastFailure)
+        return firstFailure
+    }
+
+    private fun logDelivered(requestId: String, via: String, shutterAt: Long) {
+        Log.i(
+            TAG,
+            "requestId=$requestId photo delivered via=$via " +
+                "msSinceShutter=${SystemClock.elapsedRealtime() - shutterAt} " +
+                "at=${photoDiagnosticClock.format(java.util.Date())}"
+        )
+    }
+
+    /**
+     * 촬영 명령 없이 **오는 중인 사진**을 받는다.
+     *
+     * SDK 의 사진 배달 경로는 `AtomicReference<PhotoCaptureRequest>` 슬롯 하나가 전부다.
+     * 사진이 도착하면 리스너가 그 슬롯을 `getAndSet(null)` 로 꺼내 안에 든 continuation 을
+     * `DatResult.success(photo)` 로 깨운다. `PhotoCaptureRequest` 에는 식별자가 없어서
+     * **어느 셔터의 사진인지 구분하지 않는다** — 그래서 슬롯만 열어두면 그 사진이 우리에게 온다.
+     *
+     * 슬롯에 손댈 수 없는 SDK 버전이면 null 을 돌려주고 호출부가 예전 방식으로 폴백한다.
+     */
+    private suspend fun awaitInFlightPhoto(
+        stream: Stream,
+        requestId: String
+    ): PhotoCaptureResult? {
+        val slot = DatPhotoSlot.slotOf(stream) ?: return null
+        if (!DatPhotoSlot.canCreateRequest()) return null
+        return try {
+            withTimeout(IN_FLIGHT_PHOTO_WAIT_MS) {
+                val result = suspendCancellableCoroutine<DatResult<PhotoData, CaptureError>> { continuation ->
+                    val pending = DatPhotoSlot.newRequest(continuation)
+                    if (pending == null) {
+                        continuation.cancel(IllegalStateException("PhotoCaptureRequest 생성 실패"))
+                    } else {
+                        slot.set(pending)
+                        continuation.invokeOnCancellation { slot.compareAndSet(pending, null) }
+                    }
+                }
+                result.getOrNull()
+                    ?.let { PhotoCaptureResult.Success(it) }
+                    ?: PhotoCaptureResult.Failure(
+                        "오는 중인 사진이 실패로 도착: ${result.errorOrNull()?.description}",
+                        timedOut = false
+                    )
+            }
+        } catch (_: TimeoutCancellationException) {
+            Log.w(TAG, "requestId=$requestId in-flight 대기 ${IN_FLIGHT_PHOTO_WAIT_MS}ms 초과")
+            PhotoCaptureResult.Failure(
+                "사진이 ${IN_FLIGHT_PHOTO_WAIT_MS}ms 안에 도착하지 않음",
+                timedOut = true
+            )
+        }
     }
 
     private suspend fun cleanupCamera(
@@ -666,14 +809,38 @@ class DatWearableCameraGateway(
         Wearables.registrationState.value == RegistrationState.REGISTERED
 
     private fun decodePhoto(photo: PhotoData): Bitmap? = when (photo) {
-        is PhotoData.Bitmap -> photo.bitmap
+        is PhotoData.Bitmap -> {
+            Log.i(TAG, "delivered photo type=Bitmap (EXIF 없음 — 촬영 시각 확인 불가)")
+            photo.bitmap
+        }
         is PhotoData.HEIC -> decodeWithOrientation(photo.data)
+    }
+
+    /**
+     * 진단 전용. 배달된 사진이 **몇 번째 셔터의 것인지** 가리기 위해 안경이 EXIF 에 적어둔
+     * 촬영 시각을 찍어본다. 이 값이 1차 호출 시각에 가까우면 2차 셔터는 헛방이라는 뜻이다.
+     */
+    private fun logPhotoCaptureTime(bytes: ByteArray) {
+        runCatching {
+            ByteArrayInputStream(bytes).use { input ->
+                val exif = ExifInterface(input)
+                val original = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                val subSec = exif.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL)
+                val digitized = exif.getAttribute(ExifInterface.TAG_DATETIME_DIGITIZED)
+                Log.i(
+                    TAG,
+                    "delivered photo type=HEIC bytes=${bytes.size} " +
+                        "exifOriginal=$original.$subSec exifDigitized=$digitized"
+                )
+            }
+        }.onFailure { Log.i(TAG, "delivered photo type=HEIC · EXIF 읽기 실패: ${it.message}") }
     }
 
     private fun decodeWithOrientation(data: ByteBuffer): Bitmap? {
         val buffer = data.duplicate().apply { rewind() }
         val bytes = ByteArray(buffer.remaining())
         buffer.get(bytes)
+        logPhotoCaptureTime(bytes)
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         if (bitmap == null || bitmap.width <= 0 || bitmap.height <= 0) {
             bitmap?.recycle()
@@ -731,4 +898,39 @@ class DatWearableCameraGateway(
         data class Success(val photo: PhotoData) : PhotoCaptureResult
         data class Failure(val message: String, val timedOut: Boolean) : PhotoCaptureResult
     }
+}
+
+/**
+ * DAT SDK 의 사진 대기 슬롯에 접근한다.
+ *
+ * `StreamImpl` 은 `AtomicReference<PhotoCaptureRequest>` 하나로 "지금 사진을 기다리는 사람"을
+ * 관리한다. 사진이 도착하면 리스너가 그 슬롯을 비우면서 안에 든 continuation 을 깨운다.
+ * `PhotoCaptureRequest` 에 식별자가 없으므로 **어느 셔터의 사진인지 따지지 않는다.**
+ *
+ * 정식 공개 API 가 아니라 Kotlin `internal` 이 이름만 바뀌어 노출된 것이므로, SDK 가 올라가면
+ * 이 접근은 조용히 실패할 수 있다. 그래서 전부 [runCatching] 으로 감싸고 실패하면 null 을
+ * 돌려준다 — 호출부는 그때 예전처럼 재촬영으로 되돌아간다.
+ */
+private object DatPhotoSlot {
+    private const val SLOT_GETTER =
+        "getPhotoCaptureRequest\$fbandroid_java_com_meta_wearable_dat_camera_camera"
+    private const val REQUEST_CLASS =
+        "com.meta.wearable.dat.camera.internal.StreamImpl\$PhotoCaptureRequest"
+
+    private val requestConstructor by lazy {
+        runCatching {
+            Class.forName(REQUEST_CLASS).constructors.firstOrNull { it.parameterCount == 1 }
+        }.getOrNull()
+    }
+
+    fun canCreateRequest(): Boolean = requestConstructor != null
+
+    @Suppress("UNCHECKED_CAST")
+    fun slotOf(stream: Stream): AtomicReference<Any?>? = runCatching {
+        stream.javaClass.getMethod(SLOT_GETTER).invoke(stream) as? AtomicReference<Any?>
+    }.getOrNull()
+
+    fun newRequest(continuation: Any): Any? = runCatching {
+        requestConstructor?.newInstance(continuation)
+    }.getOrNull()
 }

@@ -54,7 +54,9 @@ class FakeJudgmentGatewayTest {
         assertTrue(recipes.first().steps[1].checkType == CheckType.TIMER_ONLY)
         assertTrue(recipes.first().steps[1].inspectionPolicy == null)
         assertTrue(recipes.first().steps[4].checkType == CheckType.TIMER_ONLY)
-        assertTrue(recipes.first().steps[4].inspectionPolicy?.maxExpectedSeconds == 180)
+        // 5단계는 2분 타이머로 자동 종료된다 (3분에서 단축).
+        assertTrue(recipes.first().steps[4].inspectionPolicy?.maxExpectedSeconds == 120)
+        assertTrue(recipes.first().steps[4].timerDoneAnnouncement != null)
 
         // 3단계에서 야채와 소세지 투입을 확인하고, 그 시점이 다음 비교 단계의 기준 사진이 된다.
         assertEquals(

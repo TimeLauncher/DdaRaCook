@@ -107,7 +107,9 @@ class AppPersistence(context: Context, preferenceName: String = "ttaracook_state
         const val KEY_VIEWED_RECIPE_IDS = "viewed_recipe_ids"
         const val KEY_VOICE_GUIDANCE_ENABLED = "voice_guidance_enabled"
         const val KEY_FIXTURE_VERSION = "recipe_fixture_version"
-        const val CURRENT_FIXTURE_VERSION = 12
+        // 13: 검사 스케줄을 정책 기반으로 되살림 (1·3단계 15초 · 5단계 2분 타이머).
+        // 이 번호를 올리지 않으면 폰에 저장된 옛 레시피가 새 픽스처를 덮어 계속 30초로 돈다.
+        const val CURRENT_FIXTURE_VERSION = 13
     }
 }
 
@@ -163,6 +165,7 @@ private fun List<Recipe>.toJson() = JSONArray().also { array ->
                         put("imageCropTarget", step.imageCropTarget.name)
                         put("waitsForParallelTimer", step.waitsForParallelTimer)
                         put("baselineOnStepStart", step.baselineOnStepStart)
+                        put("timerDoneAnnouncement", step.timerDoneAnnouncement)
                         step.parallelTimer?.let { timer ->
                             put("parallelTimer", JSONObject().apply {
                                 put("label", timer.label)
@@ -238,7 +241,9 @@ private fun JSONArray.toRecipeList(): List<Recipe> = buildList {
                         ),
                         parallelTimer = parallelTimer,
                         waitsForParallelTimer = step.optBoolean("waitsForParallelTimer"),
-                        baselineOnStepStart = step.optBoolean("baselineOnStepStart")
+                        baselineOnStepStart = step.optBoolean("baselineOnStepStart"),
+                        timerDoneAnnouncement = step.optString("timerDoneAnnouncement")
+                            .takeIf(String::isNotBlank)
                     )
                 )
             }
@@ -289,6 +294,7 @@ private fun CookingSession.toJson() = JSONObject().apply {
     put("parallelTimerMessage", parallelTimerMessage)
     put("parallelTimerFired", parallelTimerFired)
     put("advanceBlockedByTimer", advanceBlockedByTimer)
+    put("stepTimerFiredOrders", JSONArray(stepTimerFiredOrders.toList()))
     put("logs", JSONArray().also { array -> logs.forEach { array.put(it.toJson()) } })
 }
 
@@ -327,7 +333,8 @@ private fun JSONObject.toSession(): CookingSession {
         parallelTimerLabel = optString("parallelTimerLabel").takeIf(String::isNotBlank),
         parallelTimerMessage = optString("parallelTimerMessage").takeIf(String::isNotBlank),
         parallelTimerFired = optBoolean("parallelTimerFired"),
-        advanceBlockedByTimer = optBoolean("advanceBlockedByTimer")
+        advanceBlockedByTimer = optBoolean("advanceBlockedByTimer"),
+        stepTimerFiredOrders = optJSONArray("stepTimerFiredOrders").toIntSet()
     )
 }
 
