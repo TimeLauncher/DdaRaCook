@@ -55,6 +55,8 @@ data class CookingSessionUiState(
     val stepElapsedSeconds: Int = 0,
     val maxExpectedExceeded: Boolean = false,
     val parallelTimerRemainingSeconds: Int? = null,
+    /** 시간 전용 단계 타이머의 남은 초. 타이머가 없는 단계면 null, 다 됐으면 0. */
+    val stepTimerRemainingSeconds: Int? = null,
     val hasResumableSession: Boolean = false,
     val resumeAutoAfterDeviceSetup: Boolean = false,
     val useFakeCamera: Boolean = true,

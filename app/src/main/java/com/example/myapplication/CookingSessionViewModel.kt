@@ -25,6 +25,7 @@ import com.example.myapplication.judgment.shouldSendStartImage
 import com.example.myapplication.recipeimport.RecipeImportException
 import com.example.myapplication.recipeimport.YouTubeRecipeApiService
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,8 +48,30 @@ private const val CAMERA_STREAM_READY_TIMEOUT_MS = 12_000L
 private const val CAMERA_PHOTO_CAPTURE_TIMEOUT_MS = 20_000L
 private const val MAX_VIEWED_RECIPE_COUNT = 30
 private const val MANUAL_ADVANCE_BASELINE_DELAY_SECONDS = 5
+
+/**
+ * 검사 예정 시각보다 이만큼 앞서 안내와 **카메라 준비**를 함께 시작한다.
+ *
+ * 카메라를 붙이고 스트림이 열리기까지 걸리는 시간(실측 2~3초)에 맞춘 값이다. 이 시간만큼
+ * 미리 시작해야 안내가 끝나는 순간 셔터가 떨어진다. 카메라 준비가 빨라지면 이 값도 줄인다.
+ */
+private const val INSPECTION_ANNOUNCE_LEAD_SECONDS = 3
+
+/**
+ * 검사 예정 시각보다 이만큼 앞서 카메라를 붙이기 시작한다.
+ *
+ * 카메라를 붙이고 스트림이 STREAMING 에 이르기까지 실측 0.8~0.9초다. 그만큼만 앞당겨
+ * 셔터가 예정 시각에 떨어지게 한다. 이 값을 키우면 셔터가 안내 도중에 울린다.
+ */
+private const val CAMERA_PREPARE_LEAD_SECONDS = 1
 private const val PRESENTATION_CAPTURE_REVEAL_DELAY_MS = 3_000L
 private const val PRESENTATION_PAGE_ADVANCE_DELAY_MS = 1_500L
+
+/** UI-owned voice route interlock used only around a real DAT camera capture. */
+internal interface CameraAudioInterlock {
+    suspend fun beforeCameraCapture(requestId: String)
+    suspend fun afterCameraCapture(requestId: String)
+}
 
 class CookingSessionViewModel(
     application: Application
@@ -63,10 +86,12 @@ class CookingSessionViewModel(
     private val networkJudgmentGateway = JudgeApiService(application)
     private val recipeImportService = YouTubeRecipeApiService()
     private val fixtureRecipes = RecipeFixtures.sampleRecipes().sortedByDescending(Recipe::isMvpReady)
-    private val initialRecipes = persistence.loadRecipes(fixtureRecipes).withAutomaticInspectionInterval()
+    private val initialRecipes = persistence.loadRecipes(fixtureRecipes)
     private val initialServerBaseUrl = persistence.loadServerBaseUrl(BuildConfig.JUDGE_BASE_URL)
     private val initialUseMockJudgment = persistence.loadUseMockJudgment(fallback = false)
     private val initialScrappedRecipeIds = persistence.loadScrappedRecipeIds()
+    @Volatile
+    private var cameraAudioInterlock: CameraAudioInterlock? = null
     private val initialViewedRecipeIds = persistence.loadViewedRecipeIds()
     private val initialVoiceGuidanceEnabled = persistence.loadVoiceGuidanceEnabled()
     private val restoredSession = persistence.loadSession()?.takeIf { saved ->
@@ -457,7 +482,7 @@ class CookingSessionViewModel(
         }
         startElapsedTicker()
         if (session.mode == SessionMode.AUTO && session.phase == CookingPhase.WAITING_FOR_CHECK) {
-            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+            scheduleNextInspection()
         }
     }
 
@@ -609,6 +634,10 @@ class CookingSessionViewModel(
         }
         datGateway.initialize()
         datGateway.prepareSession()
+    }
+
+    internal fun setCameraAudioInterlock(interlock: CameraAudioInterlock?) {
+        cameraAudioInterlock = interlock
     }
 
     fun advanceDeviceSetup(activity: Activity) {
@@ -1166,7 +1195,7 @@ class CookingSessionViewModel(
                 session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK)
             )
         }
-        scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+        scheduleNextInspection()
     }
 
     fun resumeAutoMode() {
@@ -1392,11 +1421,14 @@ class CookingSessionViewModel(
             mutableUiState.update { ui -> ui.copy(session = session.copy(phase = if (manualOnly) CookingPhase.MANUAL_MODE else CookingPhase.WAITING_FOR_CHECK)) }
             return
         }
-        if (hasReusableStartImage(step, session)) {
+        // 기준 사진이 필요 없는 절대 판정 단계(쏘야 1·3단계)는 촬영 없이 바로 카운트다운에
+        // 들어간다. 예전에는 여기서도 기준 촬영을 돌렸는데, 그 사진은 `needsStartImage=false`라
+        // 서버로 가지 않아 카메라 사이클만 버려졌다.
+        if (!step.shouldSendStartImage() || hasReusableStartImage(step, session)) {
             mutableUiState.update { ui ->
                 ui.copy(session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK))
             }
-            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+            scheduleFirstInspection(step)
             return
         }
         launchBaselineCapture(
@@ -1430,7 +1462,7 @@ class CookingSessionViewModel(
                 val session = ui.session ?: return@update ui
                 ui.copy(session = session.copy(phase = CookingPhase.WAITING_FOR_CHECK))
             }
-            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+            scheduleFirstInspection(step)
         }
 
         baselineCaptureJob = viewModelScope.launch {
@@ -1481,7 +1513,7 @@ class CookingSessionViewModel(
             if (runPendingManualInspection) {
                 triggerImmediateInspection()
             } else if (!capturePlan.inspectionRunsWhileWaitingForBaseline) {
-                scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+                scheduleFirstInspection(step)
             }
         }
     }
@@ -1515,7 +1547,7 @@ class CookingSessionViewModel(
                 return true
             }
             is CaptureOutcome.Failure -> {
-                val timeoutCount = if (outcome.kind == CaptureFailureKind.STREAM_TIMEOUT) {
+                val timeoutCount = if (outcome.kind.isCameraTimeout()) {
                     uiState.value.consecutiveCameraTimeouts + 1
                 } else {
                     0
@@ -1535,6 +1567,13 @@ class CookingSessionViewModel(
     private suspend fun captureRequiredWithRetry(
         request: CaptureRequest,
         label: String
+    ): CaptureOutcome = withCameraAudioSuspended(request.requestId) {
+        captureRequiredWithRetryWhileAudioSuspended(request, label)
+    }
+
+    private suspend fun captureRequiredWithRetryWhileAudioSuspended(
+        request: CaptureRequest,
+        label: String
     ): CaptureOutcome {
         var attempt = 1
         while (true) {
@@ -1543,7 +1582,9 @@ class CookingSessionViewModel(
                 return outcome
             }
             val failure = outcome as CaptureOutcome.Failure
-            if (!failure.retryable || attempt >= REQUIRED_CAPTURE_MAX_ATTEMPTS) return failure
+            if (!failure.retryable || attempt >= REQUIRED_CAPTURE_MAX_ATTEMPTS) {
+                return failure
+            }
             announceCurrent(
                 "$label ${attempt}회차에 실패했습니다. ${failure.userMessage} " +
                     "${REQUIRED_CAPTURE_RETRY_DELAY_MS / 1_000L}초 후 다시 촬영하겠습니다."
@@ -1565,21 +1606,73 @@ class CookingSessionViewModel(
         }
     }
 
-    private fun scheduleInspection(delaySeconds: Int) {
-        cancelInspectionWork()
-        inspectionCountdownJob = viewModelScope.launch {
-            for (remaining in delaySeconds downTo 1) {
-                mutableUiState.update { it.copy(nextInspectionInSeconds = remaining) }
-                delay(1_000L)
-            }
-            mutableUiState.update { it.copy(nextInspectionInSeconds = 0) }
-            inspectionExecutionJob = launch {
-                promptAndInspect(isManualRequest = false)
+    private suspend fun <T> withCameraAudioSuspended(
+        requestId: String,
+        block: suspend () -> T
+    ): T {
+        if (cameraGateway.isFake) return block()
+        val interlock = cameraAudioInterlock ?: return block()
+        return try {
+            interlock.beforeCameraCapture(requestId)
+            block()
+        } finally {
+            withContext(NonCancellable) {
+                interlock.afterCameraCapture(requestId)
             }
         }
     }
 
-    private suspend fun promptAndInspect(isManualRequest: Boolean) {
+    /**
+     * 단계 시작 후 첫 검사. 정책의 `earliestCheckSeconds` 를 따른다 — 재료가 도마·팬에
+     * 올라가기도 전에 찍어서 확정적으로 NOT_DONE 을 받는 호출을 없애기 위한 것이다.
+     */
+    /**
+     * 카메라가 "느린" 실패. 스트림 준비 지연과 촬영 응답 지연을 같은 것으로 센다.
+     * 둘 다 한 번으로는 자동 확인을 끄지 않고 [MAX_CONSECUTIVE_CAMERA_TIMEOUTS] 회 연속일 때만 끈다.
+     */
+    private fun CaptureFailureKind.isCameraTimeout(): Boolean =
+        this == CaptureFailureKind.STREAM_TIMEOUT || this == CaptureFailureKind.CAPTURE_TIMEOUT
+
+    private fun scheduleFirstInspection(step: RecipeStep) {
+        scheduleInspection(step.firstInspectionDelaySeconds())
+    }
+
+    /** 이미 한 번 검사한 단계의 다음 검사. 정책의 `checkIntervalSeconds` 를 따른다. */
+    private fun scheduleNextInspection() {
+        val step = uiState.value.currentStep ?: return
+        scheduleInspection(step.repeatInspectionDelaySeconds())
+    }
+
+    private fun scheduleInspection(delaySeconds: Int) {
+        cancelInspectionWork()
+        inspectionCountdownJob = viewModelScope.launch {
+            // 안내와 카메라 준비는 **시작 시점이 다르다.** 둘 다 검사 예정 시각(0)에 끝나야 하는데
+            // 걸리는 시간이 다르기 때문이다 — 안내는 약 3초, 카메라 준비는 약 1초.
+            //
+            //   T-3s  🔊 "자동으로 확인하겠습니다. 팬을 봐주세요."
+            //   T-1s  📷 카메라 붙이고 스트림 열기
+            //   T     📸 셔터 · 말이 끝나는 시점과 맞물린다
+            var announced = false
+            val cameraLead = CAMERA_PREPARE_LEAD_SECONDS.coerceAtMost(delaySeconds)
+            for (remaining in delaySeconds downTo (cameraLead + 1)) {
+                mutableUiState.update { it.copy(nextInspectionInSeconds = remaining) }
+                if (!announced && remaining <= INSPECTION_ANNOUNCE_LEAD_SECONDS) {
+                    announced = true
+                    announceCurrent("자동으로 확인하겠습니다. 팬을 봐주세요.")
+                }
+                delay(1_000L)
+            }
+            mutableUiState.update { it.copy(nextInspectionInSeconds = cameraLead) }
+            inspectionExecutionJob = launch {
+                promptAndInspect(isManualRequest = false, alreadyAnnounced = announced)
+            }
+        }
+    }
+
+    private suspend fun promptAndInspect(
+        isManualRequest: Boolean,
+        alreadyAnnounced: Boolean = false
+    ) {
         val state = uiState.value
         val session = state.session ?: return
         val step = state.currentStep ?: return
@@ -1609,14 +1702,17 @@ class CookingSessionViewModel(
                 nextInspectionInSeconds = null
             )
         }
-        announceCurrent(
-            if (isManualRequest) {
-                "확인하겠습니다. 팬을 봐주세요."
-            } else {
-                "자동으로 확인하겠습니다. 팬을 봐주세요."
-            }
-        )
-        delay(1_000L)
+        // 안내를 시작하고 **기다리지 않는다.** 아래 촬영이 카메라를 붙이는 동안 말이 흘러나온다.
+        // 카운트다운이 이미 말을 시작했으면 여기서 다시 말하지 않는다.
+        if (!alreadyAnnounced) {
+            announceCurrent(
+                if (isManualRequest) {
+                    "확인하겠습니다. 팬을 봐주세요."
+                } else {
+                    "자동으로 확인하겠습니다. 팬을 봐주세요."
+                }
+            )
+        }
 
         val request = CaptureRequest(
             requestId = UUID.randomUUID().toString(),
@@ -1639,7 +1735,9 @@ class CookingSessionViewModel(
         val outcome = if (isManualRequest) {
             captureRequiredWithRetry(request, "요청한 확인 촬영")
         } else {
-            cameraGateway.capture(request)
+            withCameraAudioSuspended(request.requestId) {
+                cameraGateway.capture(request)
+            }
         }
         handleCaptureOutcome(request, outcome)
     }
@@ -1649,7 +1747,7 @@ class CookingSessionViewModel(
         if (!isCurrentCaptureRequest(current.session, current.currentStep?.order, request)) return
         when (outcome) {
             is CaptureOutcome.Failure -> {
-                val timeoutCount = if (outcome.kind == CaptureFailureKind.STREAM_TIMEOUT) {
+                val timeoutCount = if (outcome.kind.isCameraTimeout()) {
                     uiState.value.consecutiveCameraTimeouts + 1
                 } else {
                     0
@@ -1685,25 +1783,24 @@ class CookingSessionViewModel(
                     CaptureFailureKind.DEVICE_DISCONNECTED,
                     CaptureFailureKind.SESSION_START_FAILED,
                     CaptureFailureKind.STREAM_START_FAILED,
-                    CaptureFailureKind.CAPTURE_TIMEOUT,
                     CaptureFailureKind.STREAM_STOP_FAILED ->
                         transitionToManualMode("안경 카메라 연결을 다시 준비해야 해 수동 모드로 전환합니다.")
-                    CaptureFailureKind.STREAM_TIMEOUT -> {
+                    // 촬영이 한 번 느렸다고 자동 확인을 끄지 않는다. 스트림 준비 실패와 같은
+                    // 연속 횟수 기준을 쓴다 — 안경이 잠깐 느린 것과 먹통이 된 것은 다르다.
+                    CaptureFailureKind.STREAM_TIMEOUT,
+                    CaptureFailureKind.CAPTURE_TIMEOUT -> {
                         if (timeoutCount >= MAX_CONSECUTIVE_CAMERA_TIMEOUTS) {
-                            transitionToManualMode("카메라 스트림 준비가 두 번 연속 실패해 수동 모드로 전환합니다.")
+                            transitionToManualMode("카메라가 두 번 연속 응답하지 않아 수동 모드로 전환합니다.")
                         } else {
-                            val step = uiState.value.currentStep ?: return
-                            scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+                            announceCurrent("사진이 늦어서 잠시 뒤 다시 확인할게요.")
+                            scheduleNextInspection()
                         }
                     }
                     CaptureFailureKind.BUSY,
                     CaptureFailureKind.PHOTO_CAPTURE_FAILED,
                     CaptureFailureKind.FILE_SAVE_FAILED,
                     CaptureFailureKind.NOT_READY,
-                    CaptureFailureKind.UNKNOWN -> {
-                        val step = uiState.value.currentStep ?: return
-                        scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
-                    }
+                    CaptureFailureKind.UNKNOWN -> scheduleNextInspection()
                     CaptureFailureKind.INVALID_REQUEST,
                     CaptureFailureKind.CANCELLED -> Unit
                 }
@@ -1777,18 +1874,21 @@ class CookingSessionViewModel(
             CaptureFailureKind.DEVICE_DISCONNECTED,
             CaptureFailureKind.SESSION_START_FAILED,
             CaptureFailureKind.STREAM_START_FAILED,
-            CaptureFailureKind.STREAM_TIMEOUT,
-            CaptureFailureKind.CAPTURE_TIMEOUT,
             CaptureFailureKind.STREAM_STOP_FAILED ->
                 transitionToManualMode("안경 카메라 연결을 다시 준비해야 해 수동 모드로 전환합니다.")
+            CaptureFailureKind.STREAM_TIMEOUT,
+            CaptureFailureKind.CAPTURE_TIMEOUT -> {
+                if (uiState.value.consecutiveCameraTimeouts >= MAX_CONSECUTIVE_CAMERA_TIMEOUTS) {
+                    transitionToManualMode("카메라가 두 번 연속 응답하지 않아 수동 모드로 전환합니다.")
+                } else {
+                    scheduleNextInspection()
+                }
+            }
             CaptureFailureKind.BUSY,
             CaptureFailureKind.PHOTO_CAPTURE_FAILED,
             CaptureFailureKind.FILE_SAVE_FAILED,
             CaptureFailureKind.NOT_READY,
-            CaptureFailureKind.UNKNOWN -> {
-                val step = uiState.value.currentStep ?: return
-                scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
-            }
+            CaptureFailureKind.UNKNOWN -> scheduleNextInspection()
             CaptureFailureKind.INVALID_REQUEST,
             CaptureFailureKind.CANCELLED -> Unit
         }
@@ -1834,8 +1934,7 @@ class CookingSessionViewModel(
                         )
                     )
                 }
-                val step = uiState.value.currentStep ?: return
-                if (outcome.retryable) scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+                if (outcome.retryable) scheduleNextInspection()
             }
 
             is JudgmentOutcome.Success -> {
@@ -2005,7 +2104,7 @@ class CookingSessionViewModel(
                         )
                     }
                     announceCurrent("완료 상태를 한 번 더 확인할게요.")
-                    scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+                    scheduleNextInspection()
                     return
                 }
                 val completedAt = System.currentTimeMillis()
@@ -2084,7 +2183,7 @@ class CookingSessionViewModel(
                     )
                 }
                 announceCurrent("아직 완료 상태가 아니에요. 현재 단계를 계속해주세요.")
-                scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+                scheduleNextInspection()
             }
 
             JudgmentVerdict.CANNOT_TELL -> {
@@ -2113,7 +2212,7 @@ class CookingSessionViewModel(
                     announceCurrent("자동 확인을 멈췄어요. 다 되면 다음이라고 말해주세요.")
                 } else {
                     announceCurrent("팬이 잘 안 보여요. 팬 쪽을 한 번 봐주세요.")
-                    scheduleInspection(AUTOMATIC_INSPECTION_INTERVAL_SECONDS)
+                    scheduleNextInspection()
                 }
             }
         }
@@ -2201,12 +2300,28 @@ class CookingSessionViewModel(
                 val elapsed = ((System.currentTimeMillis() - session.currentStepStartedAtMs) / 1_000L).toInt().coerceAtLeast(0)
                 val maximum = step.inspectionPolicy?.maxExpectedSeconds ?: Int.MAX_VALUE
                 val remaining = session.parallelTimerRemainingSeconds()
+                val stepTimerRemaining = step.stepTimerSeconds()?.let { (it - elapsed).coerceAtLeast(0) }
                 mutableUiState.update {
                     it.copy(
                         stepElapsedSeconds = elapsed,
-                        maxExpectedExceeded = elapsed > maximum,
-                        parallelTimerRemainingSeconds = remaining
+                        // 타이머로 도는 단계는 "예상 시간 초과"가 뜰 일이 없다 — 그 시점에 넘어간다.
+                        maxExpectedExceeded = stepTimerRemaining == null && elapsed > maximum,
+                        parallelTimerRemainingSeconds = remaining,
+                        stepTimerRemainingSeconds = stepTimerRemaining
                     )
+                }
+                // 시간 전용 단계는 사진을 찍지 않는다. 정해진 시간이 지나면 안내하고 넘어간다.
+                val stepTimer = step.stepTimerSeconds()
+                if (
+                    stepTimer != null &&
+                    elapsed >= stepTimer &&
+                    step.order !in session.stepTimerFiredOrders &&
+                    session.phase != CookingPhase.SESSION_COMPLETED
+                ) {
+                    announceStepTimerDone(step)
+                    delay(AUTO_ADVANCE_DELAY_MS)
+                    advanceToNextStep(manual = false)
+                    continue
                 }
                 if (remaining == 0 && !session.parallelTimerFired && session.phase != CookingPhase.SESSION_COMPLETED) {
                     announceParallelTimerDone(session, step.order)
@@ -2220,6 +2335,35 @@ class CookingSessionViewModel(
                 delay(1_000L)
             }
         }
+    }
+
+    /**
+     * 시간 전용 단계의 타이머 만료 안내.
+     *
+     * `stepTimerFiredOrders` 에 단계를 먼저 넣어 1초마다 도는 티커가 같은 안내를 반복하지 않게 한다.
+     */
+    private fun announceStepTimerDone(step: RecipeStep) {
+        var alreadyFired = false
+        mutableUiState.update { ui ->
+            val current = ui.session ?: return@update ui
+            if (step.order in current.stepTimerFiredOrders) {
+                alreadyFired = true
+                return@update ui
+            }
+            ui.copy(
+                session = current.copy(
+                    stepTimerFiredOrders = current.stepTimerFiredOrders + step.order,
+                    logs = current.logs + SessionLogEntry(
+                        timestampMs = System.currentTimeMillis(),
+                        stepOrder = step.order,
+                        message = "시간 전용 단계 타이머 만료 (${step.stepTimerSeconds()}초)",
+                        eventType = "STEP_TIMER_DONE"
+                    )
+                )
+            )
+        }
+        if (alreadyFired) return
+        announceCurrent(step.timerDoneAnnouncement ?: "${step.order}단계 시간이 다 됐어요.")
     }
 
     /**

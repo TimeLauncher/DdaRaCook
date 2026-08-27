@@ -107,6 +107,23 @@ class VoiceAudioRouterTest {
         assertFalse(port.active)
         assertTrue(statuses.last().message.contains("폰 호출어로 전환"))
     }
+
+    @Test
+    fun cameraCaptureReleasesAndRestoresFullGlassesRoute() = runBlocking {
+        val port = FakeCommunicationRoute(
+            RouteAttempt.Connected("Ray-Ban Meta"),
+            RouteAttempt.Connected("Ray-Ban Meta")
+        )
+        val router = VoiceAudioRouter(communicationRoute = port, onStatus = {})
+
+        router.startVoiceSession()
+
+        assertTrue(router.suspendGlassesRouteForCamera(timeoutMs = 0L))
+        assertFalse(port.active)
+        assertTrue(router.restoreGlassesRouteAfterCamera())
+        assertTrue(port.active)
+        assertEquals(2, port.requestCount)
+    }
 }
 
 private class FakeCommunicationRoute(vararg attempts: RouteAttempt) : CommunicationRoutePort {
@@ -125,6 +142,8 @@ private class FakeCommunicationRoute(vararg attempts: RouteAttempt) : Communicat
     }
 
     override fun isGlassesRouteActive(): Boolean = active
+
+    override fun hasBluetoothCommunicationRoute(): Boolean = active
 
     override fun releaseRoute() {
         releaseCount += 1
