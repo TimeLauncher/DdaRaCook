@@ -102,6 +102,65 @@ def test_incomplete_auto_check_is_downgraded_to_manual_step():
     assert any("수동 진행 단계" in warning for warning in result["warnings"])
 
 
+def test_time_only_step_gets_timer_from_its_own_instruction():
+    """앱은 `inspectionPolicy.maxExpectedSeconds` 하나로 시간 전용 단계의 타이머를 읽는다.
+
+    실측(`SSbyRvzf1VQ`)에서 "30초 불린다" 단계가 정책 없이 나왔고, 그 결과 앱에서 타이머도
+    자동 진행도 없이 진행바만 가득 찬 채 멈춰 있었다.
+    """
+    payload = json.loads(sample_model_json())
+    step = payload["recipe"]["steps"][0]
+    step["instruction"] = "냉동 스파게티면을 뜨거운 물에 30초 불린다"
+    step["checkType"] = "TIME_ONLY"
+    step["isAutoCheck"] = False
+    step["inspectionPolicy"] = None
+
+    result = extract_recipe(
+        sample_source(), completion=lambda _: json.dumps(payload, ensure_ascii=False)
+    )
+
+    policy = result["recipe"]["steps"][0]["inspectionPolicy"]
+    assert policy is not None, "시간이 적힌 시간 전용 단계는 타이머를 받아야 한다"
+    assert policy["maxExpectedSeconds"] == 30
+    assert any("30초로 채웠습니다" in warning for warning in result["warnings"])
+
+
+def test_downgraded_step_also_gets_timer_from_instruction():
+    """강등된 단계도 TIME_ONLY 다. 같은 타이머 보정을 받아야 한다."""
+    payload = json.loads(sample_model_json())
+    step = payload["recipe"]["steps"][0]
+    step["instruction"] = "7~8분간 삶는다"
+    step["checkType"] = "COLOR_CHANGE"
+    step["checkCondition"] = None
+    step["inspectionPolicy"] = None
+    step["isAutoCheck"] = True
+
+    result = extract_recipe(
+        sample_source(), completion=lambda _: json.dumps(payload, ensure_ascii=False)
+    )
+
+    normalized = result["recipe"]["steps"][0]
+    assert normalized["checkType"] == "TIME_ONLY"
+    # "7~8분"은 범위이므로 큰 쪽만 센다.
+    assert normalized["inspectionPolicy"]["maxExpectedSeconds"] == 480
+
+
+def test_time_only_step_without_any_duration_is_reported_not_invented():
+    payload = json.loads(sample_model_json())
+    step = payload["recipe"]["steps"][0]
+    step["instruction"] = "면을 그릇에 담는다"
+    step["checkType"] = "TIME_ONLY"
+    step["isAutoCheck"] = False
+    step["inspectionPolicy"] = None
+
+    result = extract_recipe(
+        sample_source(), completion=lambda _: json.dumps(payload, ensure_ascii=False)
+    )
+
+    assert result["recipe"]["steps"][0]["inspectionPolicy"] is None
+    assert any("시간이 없어 타이머를 걸지 못했습니다" in w for w in result["warnings"])
+
+
 def test_missing_ingredient_amount_uses_unknown_amount():
     payload = json.loads(sample_model_json())
     del payload["recipe"]["ingredients"][0]["amount"]

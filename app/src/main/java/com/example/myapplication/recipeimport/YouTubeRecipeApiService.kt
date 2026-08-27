@@ -25,6 +25,22 @@ data class RecipeImportResult(
 
 class RecipeImportException(message: String) : Exception(message)
 
+/**
+ * 서버의 `parse_youtube_video_id` 가 받아주는 형태인지 미리 본다.
+ *
+ * 왕복 한 번과 400 오류를 아끼려는 것뿐이므로 video id 자체는 검사하지 않는다.
+ * 최종 판정은 언제나 서버가 한다.
+ */
+internal fun looksLikeYoutubeLink(value: String): Boolean {
+    val url = value.trim()
+    if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+        return false
+    }
+    val host = runCatching { URL(url).host }.getOrNull()?.lowercase()
+        ?.removePrefix("www.")?.removePrefix("m.") ?: return false
+    return host == "youtu.be" || host == "youtube.com" || host == "music.youtube.com"
+}
+
 class YouTubeRecipeApiService(
     baseUrl: String = BuildConfig.JUDGE_BASE_URL,
     private val teamToken: String = BuildConfig.JUDGE_TEAM_TOKEN
@@ -74,8 +90,16 @@ class YouTubeRecipeApiService(
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 10_000
-        // 서버는 레시피 모델을 90초씩 최대 2회 호출할 수 있다.
-        const val READ_TIMEOUT_MS = 200_000
+
+        /**
+         * 서버의 최악 소요 시간보다 **길어야** 한다.
+         *
+         * 서버 예산(recipe_extractor.py): 호스팅 자막 45초 + 제목 조회 8초 + 모델 150초 = 203초.
+         * 이보다 짧으면 서버가 자기 오류 메시지("모델 응답 시간이 초과되었습니다")를 낼 틈도 없이
+         * 앱이 먼저 소켓을 끊어, 원인을 알 수 없는 일반 타임아웃만 사용자에게 남는다.
+         * 서버 예산을 바꾸면 이 값도 함께 올린다.
+         */
+        const val READ_TIMEOUT_MS = 230_000
     }
 }
 

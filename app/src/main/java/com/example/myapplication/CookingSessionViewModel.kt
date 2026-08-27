@@ -362,11 +362,24 @@ class CookingSessionViewModel(
                 presentationSimulationSelected = false,
                 presentationCaptureVisible = false,
                 editorImportDraft = null,
+                recipeImportUrl = "",
                 isRecipeImporting = false,
                 recipeImportError = null,
                 recipeImportWarnings = emptyList()
             )
         }
+    }
+
+    /**
+     * 레시피 목록의 링크 입력에서 바로 추출을 시작한다.
+     *
+     * 편집기를 먼저 연 뒤 추출을 건다 — `openRecipeEditor()` 가 진행 중인 추출을 취소하므로
+     * 순서가 바뀌면 방금 건 요청이 그대로 죽는다. 결과·경고·오류는 모두 편집기가 보여준다.
+     */
+    fun openRecipeEditorWithYoutubeImport(url: String) {
+        openRecipeEditor()
+        mutableUiState.update { it.copy(recipeImportUrl = url.trim()) }
+        importRecipeFromYoutube(url)
     }
 
     fun importRecipeFromYoutube(url: String) {
@@ -422,6 +435,7 @@ class CookingSessionViewModel(
                 selectedRecipeId = normalized.id,
                 currentScreen = AppScreen.S2_RECIPE_DETAIL,
                 editorImportDraft = null,
+                recipeImportUrl = "",
                 isRecipeImporting = false,
                 recipeImportError = null,
                 recipeImportWarnings = emptyList()
@@ -435,6 +449,7 @@ class CookingSessionViewModel(
             it.copy(
                 currentScreen = if (it.selectedRecipeId.isBlank()) AppScreen.S0_SERVICE_HOME else AppScreen.S2_RECIPE_DETAIL,
                 editorImportDraft = null,
+                recipeImportUrl = "",
                 isRecipeImporting = false,
                 recipeImportError = null,
                 recipeImportWarnings = emptyList()

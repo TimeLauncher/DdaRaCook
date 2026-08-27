@@ -458,6 +458,7 @@ private fun TtaraCookApp(
                     onToggleScrap = sessionViewModel::toggleRecipeScrap,
                     onHome = sessionViewModel::backToHome,
                     onAddRecipe = { sessionViewModel.openRecipeEditor() },
+                    onExtractYoutube = sessionViewModel::openRecipeEditorWithYoutubeImport,
                     onMy = sessionViewModel::openMyPage,
                     onPresentationSimulation = sessionViewModel::openPresentationSimulationDetail,
                     onResume = sessionViewModel::resumeSavedSession
@@ -477,6 +478,7 @@ private fun TtaraCookApp(
                 AppScreen.S3_RECIPE_EDITOR -> FigmaRecipeEditorScreen(
                     existing = uiState.selectedRecipe,
                     importedDraft = uiState.editorImportDraft,
+                    initialYoutubeUrl = uiState.recipeImportUrl,
                     isImporting = uiState.isRecipeImporting,
                     importError = uiState.recipeImportError,
                     importWarnings = uiState.recipeImportWarnings,

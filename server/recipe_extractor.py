@@ -519,6 +519,11 @@ def check_recipe_consistency(recipe_value: Any) -> list[str]:
             continue
         policy = step.get("inspectionPolicy")
         if not isinstance(policy, dict):
+            # 정책이 없으면 앱에 타이머도 진행바도 없다. 시간이 적힌 단계에서 이걸 조용히
+            # 넘기면 가장 필요한 경고가 사라진다.
+            warnings.append(
+                f"{index}단계는 문장에 {mentioned}초가 적혔는데 예상 시간이 없습니다. 확인해 주세요."
+            )
             continue
         try:
             expected = int(policy.get("maxExpectedSeconds") or 0)
@@ -529,6 +534,57 @@ def check_recipe_consistency(recipe_value: Any) -> list[str]:
                 f"{index}단계는 문장에 {mentioned}초가 적혔는데 예상 시간이 {expected}초로 더 "
                 f"짧습니다. 확인해 주세요."
             )
+    return warnings
+
+
+def _has_valid_policy(step: dict[str, Any]) -> bool:
+    try:
+        InspectionPolicyPayload.model_validate(step.get("inspectionPolicy"))
+    except ValidationError:
+        return False
+    return True
+
+
+def _fill_missing_time_only_timers(recipe_value: Any) -> list[str]:
+    """시간 전용 단계에 타이머 길이를 채운다.
+
+    앱은 `TIME_ONLY` 단계의 타이머 길이를 `inspectionPolicy.maxExpectedSeconds` 하나로 읽는다
+    (`CookingSessionStateMachine.stepTimerSeconds()`). 정책이 없으면 타이머도, 자동 진행도,
+    진행바도 없이 단계가 멈춘 것처럼 보인다. "30초 불린다"처럼 문장에 시간이 적혀 있는데
+    모델이 정책을 빠뜨린 경우가 실측에서 반복됐다.
+
+    없는 정보를 지어내지는 않는다. 문장에서 시간을 읽어낼 수 있을 때만 채우고, 그 사실을
+    경고로 남겨 저장 전에 사용자가 확인하게 한다.
+    """
+    if not isinstance(recipe_value, dict) or not isinstance(recipe_value.get("steps"), list):
+        return []
+    warnings: list[str] = []
+    for index, step in enumerate(recipe_value["steps"], start=1):
+        if not isinstance(step, dict):
+            continue
+        check_type = str(step.get("checkType", "")).strip().upper()
+        if check_type != "TIME_ONLY" or _has_valid_policy(step):
+            continue
+        seconds = instruction_seconds(step.get("instruction", ""))
+        if seconds <= 0:
+            warnings.append(
+                f"{index}단계는 시간 전용인데 자막에 시간이 없어 타이머를 걸지 못했습니다. "
+                f"최대 시간을 직접 입력해 주세요."
+            )
+            continue
+        seconds = min(seconds, 14400)
+        step["inspectionPolicy"] = {
+            # 시간 전용 단계는 사진을 찍지 않으므로 검사 주기 세 값은 쓰이지 않는다.
+            # 페이로드 필수 항목이라 계약을 만족하는 최소값만 넣는다.
+            "earliestCheckSeconds": min(30, seconds),
+            "checkIntervalSeconds": 30,
+            "burstSeconds": 2,
+            "requiredConsecutiveDone": 1,
+            "maxExpectedSeconds": seconds,
+        }
+        warnings.append(
+            f"{index}단계 타이머를 단계 문장에 적힌 {seconds}초로 채웠습니다. 확인해 주세요."
+        )
     return warnings
 
 
@@ -548,11 +604,7 @@ def _downgrade_incomplete_auto_checks(recipe_value: Any) -> list[str]:
             continue
         condition = step.get("checkCondition")
         has_condition = isinstance(condition, str) and bool(condition.strip())
-        try:
-            InspectionPolicyPayload.model_validate(step.get("inspectionPolicy"))
-            has_valid_policy = True
-        except ValidationError:
-            has_valid_policy = False
+        has_valid_policy = _has_valid_policy(step)
         if has_condition and has_valid_policy:
             continue
         step["checkType"] = "TIME_ONLY"
@@ -587,8 +639,9 @@ def extract_recipe(
             base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
             max_retries=0,
         )
-        # 앱 읽기 제한이 200초다(YouTubeRecipeApiService.READ_TIMEOUT_MS). 자막 조회까지
-        # 합쳐 그 안에 끝나야 앱이 소켓 타임아웃 대신 서버 메시지를 받는다.
+        # 이 값 + 자막 조회 45초 + 제목 조회 8초 = 203초가 서버의 최악 소요 시간이고,
+        # 앱 읽기 제한(YouTubeRecipeApiService.READ_TIMEOUT_MS)은 그보다 길어야 앱이 소켓
+        # 타임아웃 대신 서버 메시지를 받는다. 여기를 올리면 앱 쪽도 함께 올린다.
         # 90초×2회는 Render 에서 180초를 다 쓰고 실패했다 — 재시도를 없애고 한 번을 길게 준다.
         timeout_seconds = float(os.getenv("RECIPE_EXTRACTION_TIMEOUT_S", "150"))
         timeout_retries = max(0, int(os.getenv("RECIPE_EXTRACTION_TIMEOUT_RETRIES", "0")))
@@ -621,7 +674,9 @@ def extract_recipe(
     if payload.get("error"):
         raise RecipeExtractionError(str(payload["error"])[:300], 422)
     recipe_value = payload.get("recipe", payload)
+    # 강등이 먼저다. 강등된 단계도 TIME_ONLY 가 되므로 같은 타이머 보정을 받아야 한다.
     normalization_warnings = _downgrade_incomplete_auto_checks(recipe_value)
+    normalization_warnings.extend(_fill_missing_time_only_timers(recipe_value))
     try:
         recipe = RecipePayload.model_validate(recipe_value)
     except ValidationError as exc:
