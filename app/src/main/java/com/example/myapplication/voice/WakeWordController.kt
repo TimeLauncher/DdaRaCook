@@ -3,7 +3,9 @@ package com.example.myapplication.voice
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import com.example.myapplication.BuildConfig
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -34,7 +36,8 @@ data class WakeWordStatus(
 )
 
 /**
- * Foreground-only, phone-microphone wake-word detector.
+ * Foreground-only wake-word detector. [VoiceAudioRouter] selects the active glasses or phone
+ * communication input before this detector opens its recorder.
  *
  * The Korean Vosk model is downloaded once from the official Alpha Cephei host and then runs
  * completely on-device. The product wake phrase is spoken as "따라쿡"; the acoustic model emits
@@ -54,6 +57,9 @@ class WakeWordController(
             "eea36124087fed26c59996a4761519458e3bd185e8ea9d9865ad8760c4a1d989"
         private const val SAMPLE_RATE = 16_000.0f
         private const val WAKE_GRAMMAR = "[\"따라 쿡\", \"[unk]\"]"
+        private const val REQUIRED_STABLE_PARTIALS = 2
+        private const val MIN_STABLE_PARTIAL_MS = 150L
+        private const val POST_COMMAND_COOLDOWN_MS = 1_000L
     }
 
     private val applicationContext = context.applicationContext
@@ -63,12 +69,19 @@ class WakeWordController(
     private val modelDirectory = File(modelsRoot, MODEL_NAME)
 
     private var model: Model? = null
+    private var recognizer: Recognizer? = null
     private var speechService: SpeechService? = null
     private var preparationJob: Job? = null
+    private var resumeJob: Job? = null
     private var sessionActive = false
     private var temporarilyPaused = false
+    private var cooldownActive = false
     private var wakeDispatched = false
     private var released = false
+    private val candidateTracker = WakeWordCandidateTracker(
+        requiredStablePartials = REQUIRED_STABLE_PARTIALS,
+        minimumStableMs = MIN_STABLE_PARTIAL_MS
+    )
 
     fun activate() {
         if (released) return
@@ -79,6 +92,9 @@ class WakeWordController(
     fun deactivate() {
         sessionActive = false
         temporarilyPaused = false
+        cooldownActive = false
+        resumeJob?.cancel()
+        resumeJob = null
         stopListening()
         publish(WakeWordStatus("음성 호출 꺼짐"))
     }
@@ -86,6 +102,7 @@ class WakeWordController(
     fun pause() {
         if (released) return
         temporarilyPaused = true
+        candidateTracker.reset()
         stopListening()
         if (sessionActive) {
             publish(WakeWordStatus("다른 음성 작업이 끝나기를 기다리는 중", ready = model != null))
@@ -94,9 +111,24 @@ class WakeWordController(
 
     fun resume() {
         if (released) return
+        val applyCooldown = wakeDispatched
         temporarilyPaused = false
         wakeDispatched = false
-        reconcile()
+        candidateTracker.reset()
+        resumeJob?.cancel()
+        if (applyCooldown && sessionActive) {
+            cooldownActive = true
+            publish(WakeWordStatus("음성 호출 다시 준비하는 중", ready = model != null))
+            resumeJob = scope.launch {
+                delay(POST_COMMAND_COOLDOWN_MS)
+                cooldownActive = false
+                resumeJob = null
+                reconcile()
+            }
+        } else {
+            cooldownActive = false
+            reconcile()
+        }
     }
 
     fun release() {
@@ -106,6 +138,8 @@ class WakeWordController(
         temporarilyPaused = true
         preparationJob?.cancel()
         preparationJob = null
+        resumeJob?.cancel()
+        resumeJob = null
         stopListening()
         runCatching { model?.close() }
         model = null
@@ -113,7 +147,7 @@ class WakeWordController(
     }
 
     private fun reconcile() {
-        if (!sessionActive || temporarilyPaused || released) return
+        if (!sessionActive || temporarilyPaused || cooldownActive || released) return
         if (model == null) prepareModel() else startListening()
     }
 
@@ -241,8 +275,10 @@ class WakeWordController(
         if (!sessionActive || temporarilyPaused || released || speechService != null) return
         val activeModel = model ?: return
         try {
-            val recognizer = Recognizer(activeModel, SAMPLE_RATE, WAKE_GRAMMAR)
-            speechService = SpeechService(recognizer, SAMPLE_RATE).also { it.startListening(this) }
+            candidateTracker.reset()
+            val activeRecognizer = Recognizer(activeModel, SAMPLE_RATE, WAKE_GRAMMAR)
+            recognizer = activeRecognizer
+            speechService = SpeechService(activeRecognizer, SAMPLE_RATE).also { it.startListening(this) }
             publish(
                 WakeWordStatus(
                     message = "'따라쿡'이라고 부르세요",
@@ -251,6 +287,8 @@ class WakeWordController(
                 )
             )
         } catch (error: Exception) {
+            runCatching { recognizer?.close() }
+            recognizer = null
             Log.e(TAG, "Unable to start wake-word listening", error)
             publish(
                 WakeWordStatus(
@@ -263,20 +301,32 @@ class WakeWordController(
     }
 
     private fun stopListening() {
-        val activeService = speechService ?: return
+        candidateTracker.reset()
+        val activeService = speechService
+        val activeRecognizer = recognizer
         speechService = null
-        runCatching { activeService.stop() }
-        runCatching { activeService.shutdown() }
+        recognizer = null
+        if (activeService != null) {
+            runCatching { activeService.stop() }
+            runCatching { activeService.shutdown() }
+        }
+        runCatching { activeRecognizer?.close() }
     }
 
-    override fun onResult(hypothesis: String) = detectWakeWord(hypothesis, "text")
+    override fun onResult(hypothesis: String) = detectFinalWakeWord(hypothesis, "text")
 
-    override fun onPartialResult(hypothesis: String) = Unit
+    override fun onPartialResult(hypothesis: String) {
+        if (wakeDispatched || temporarilyPaused || cooldownActive || released) return
+        val text = hypothesisText(hypothesis, "partial")
+        val matched = candidateTracker.observePartial(text, SystemClock.elapsedRealtime())
+        debugHypothesis("partial", text, matched)
+        if (matched) dispatchWakeWord()
+    }
 
     override fun onFinalResult(hypothesis: String) {
-        detectWakeWord(hypothesis, "text")
+        detectFinalWakeWord(hypothesis, "text")
         mainHandler.post {
-            if (!wakeDispatched && sessionActive && !temporarilyPaused && !released) {
+            if (!wakeDispatched && sessionActive && !temporarilyPaused && !cooldownActive && !released) {
                 stopListening()
                 scope.launch {
                     delay(300L)
@@ -290,7 +340,7 @@ class WakeWordController(
         Log.e(TAG, "Wake-word recognition error", exception)
         mainHandler.post {
             stopListening()
-            if (sessionActive && !temporarilyPaused && !released) {
+            if (sessionActive && !temporarilyPaused && !cooldownActive && !released) {
                 publish(WakeWordStatus("호출어 감지를 다시 시작하는 중", ready = model != null))
                 scope.launch {
                     delay(1_000L)
@@ -303,24 +353,37 @@ class WakeWordController(
     override fun onTimeout() {
         mainHandler.post {
             stopListening()
-            if (sessionActive && !temporarilyPaused && !released) reconcile()
+            if (sessionActive && !temporarilyPaused && !cooldownActive && !released) reconcile()
         }
     }
 
-    private fun detectWakeWord(hypothesis: String, field: String) {
-        if (wakeDispatched || released) return
-        val normalized = runCatching {
-            JSONObject(hypothesis).optString(field).replace(" ", "")
-        }.getOrDefault("")
-        if (!isTtaraCookWakeWord(normalized)) return
+    private fun detectFinalWakeWord(hypothesis: String, field: String) {
+        if (wakeDispatched || temporarilyPaused || cooldownActive || released) return
+        val text = hypothesisText(hypothesis, field)
+        val matched = candidateTracker.observeFinal(text)
+        debugHypothesis("final", text, matched)
+        if (matched) dispatchWakeWord()
+    }
+
+    private fun dispatchWakeWord() {
+        if (wakeDispatched || temporarilyPaused || cooldownActive || released) return
         wakeDispatched = true
         mainHandler.post {
-            if (!sessionActive || released) return@post
+            if (!sessionActive || temporarilyPaused || cooldownActive || released) return@post
             temporarilyPaused = true
             stopListening()
             publish(WakeWordStatus("호출어 인식됨", ready = true))
             onWakeWord()
         }
+    }
+
+    private fun hypothesisText(hypothesis: String, field: String): String = runCatching {
+        JSONObject(hypothesis).optString(field)
+    }.getOrDefault("")
+
+    private fun debugHypothesis(source: String, text: String, matched: Boolean) {
+        if (!BuildConfig.DEBUG || text.isBlank()) return
+        Log.d(TAG, "$source=${text.take(40)} matched=$matched")
     }
 
     private fun publish(status: WakeWordStatus) {
@@ -340,3 +403,38 @@ class WakeWordController(
 
 internal fun isTtaraCookWakeWord(text: String): Boolean =
     text.filterNot(Char::isWhitespace) == "따라쿡"
+
+internal class WakeWordCandidateTracker(
+    private val requiredStablePartials: Int = 2,
+    private val minimumStableMs: Long = 150L
+) {
+    private var stablePartialCount = 0
+    private var firstStablePartialAtMs = 0L
+
+    init {
+        require(requiredStablePartials >= 1)
+        require(minimumStableMs >= 0L)
+    }
+
+    fun observePartial(text: String, nowMs: Long): Boolean {
+        if (!isTtaraCookWakeWord(text)) {
+            reset()
+            return false
+        }
+        if (stablePartialCount == 0) firstStablePartialAtMs = nowMs
+        stablePartialCount += 1
+        return stablePartialCount >= requiredStablePartials &&
+            nowMs - firstStablePartialAtMs >= minimumStableMs
+    }
+
+    fun observeFinal(text: String): Boolean {
+        val matched = isTtaraCookWakeWord(text)
+        reset()
+        return matched
+    }
+
+    fun reset() {
+        stablePartialCount = 0
+        firstStablePartialAtMs = 0L
+    }
+}
